@@ -4922,8 +4922,6 @@
             }
 
             function exportVisibleRowsToSpreadsheetXml() {
-                var theadRows = table.tHead ? table.tHead.rows : null;
-                var groupRow = (theadRows && theadRows.length > 1) ? theadRows[0] : null;
                 var headCells = table.tHead ? table.tHead.rows[table.tHead.rows.length - 1].cells : [];
                 var colHeaders = [];
                 var colIndices = [];
@@ -4952,31 +4950,7 @@
                 parts.push('<Worksheet ss:Name="Records">');
                 parts.push('<Table>');
 
-                                if (groupRow) {
-                    var groupCells = groupRow.cells;
-                    var leafVisible = [];
-                    for (var li = 0; li < headCells.length; li++) {
-                        if (headCells[li].style.display === 'none') { leafVisible[li] = false; continue; }
-                        var t = normalize((headCells[li].innerText || '').trim());
-                        if (t === 'status' || t === 'action') { leafVisible[li] = false; continue; }
-                        leafVisible[li] = true;
-                    }
-                    var pos = 0;
-                    parts.push('<Row>');
-                    for (var gc = 0; gc < groupCells.length; gc++) {
-                        var span = Number(groupCells[gc].colSpan || 1) || 1;
-                        var text = (groupCells[gc].innerText || '').trim();
-                        var visCount = 0;
-                        for (var k = pos; k < pos + span && k < leafVisible.length; k++) if (leafVisible[k]) visCount++;
-                        if (visCount > 0) {
-                            var merge = visCount - 1;
-                            var mergeAttr = merge > 0 ? ' ss:MergeAcross="' + String(merge) + '"' : '';
-                            parts.push('<Cell' + mergeAttr + '><Data ss:Type="String">' + xmlEscape(text) + '</Data></Cell>');
-                        }
-                        pos += span;
-                    }
-                    parts.push('</Row>');
-                }parts.push('<Row>');
+                parts.push('<Row>');
                 for (var i = 0; i < colHeaders.length; i++) {
                     parts.push('<Cell><Data ss:Type="String">' + xmlEscape(colHeaders[i]) + '</Data></Cell>');
                 }
@@ -5043,7 +5017,6 @@
                 } else if (format === 'calc_csv') {
                     delimiter = ';';
                     extension = 'csv';
-                    addSepLine = true;
                 } else if (format === 'tsv') {
                     delimiter = '\t';
                     extension = 'tsv';
@@ -5390,8 +5363,6 @@
             applyFilter(search.value);
             applyAuditFilters();
         })();
-
-
 
 
 
