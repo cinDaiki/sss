@@ -1,0 +1,5333 @@
+﻿/*
+  script ng Inventory Dashboard.
+  login check, records rendering, search/filter/pagination, import/export, at audit trail.
+  localStorage = records/audit, sessionStorage = login session.
+*/
+
+(function () {
+            var AUTH_KEY = 'sss_inventory_authed_v1';
+            var USER_KEY = 'sss_inventory_user_v1';
+            var RECORDS_KEY = 'sss_inventory_records_v1';
+            var AUDIT_KEY = 'sss_inventory_audit_v1';
+            var SEED_FLAG_KEY = 'sss_inventory_seed_davao_v1';
+            var TOAST_KEY = 'sss_inventory_toast_v1';
+            var CUSTOM_FIELDS_KEY = 'sss_inventory_custom_fields_v1';
+            var CUSTOM_FIELDS_ADMIN_USERS = { 'admin': true, 'jhoanna': true };
+            
+
+            if (sessionStorage.getItem(AUTH_KEY) !== '1') {
+                window.location.replace('login.html');
+                return;
+            }
+
+            function exportVisibleRowsToFods() {
+                var theadRows = table.tHead ? table.tHead.rows : null;
+                var groupRow = (theadRows && theadRows.length > 1) ? theadRows[0] : null;
+                var leafRow = theadRows ? theadRows[theadRows.length - 1] : null;
+                var leafCells = leafRow ? leafRow.cells : [];
+                var colHeaders = [];
+                var colIndices = [];
+                var colTypes = [];
+
+                for (var h = 0; h < leafCells.length; h++) {
+                    var headerText = (leafCells[h].innerText || '').trim();
+                    if (leafCells[h].style.display === 'none') continue;
+                    if (normalize(headerText) === 'status') continue;
+                    if (normalize(headerText) === 'action') continue;
+                    colHeaders.push(headerText);
+                    colIndices.push(h);
+                    colTypes.push(String(leafCells[h].getAttribute('data-col-type') || ''));
+                }
+
+                var rows = allMatchingRecordRows();
+
+                var parts = [];
+                parts.push('<?xml version="1.0" encoding="UTF-8"?>');
+                parts.push('<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.2">');
+                parts.push('<office:body><office:spreadsheet>');
+                parts.push('<table:table table:name="Records">');
+
+                // Header rows: group (months) then leaf labels
+                if (groupRow) {
+                    // Build mapping from group cells to visible leaf spans
+                    var groupCells = groupRow.cells;
+                    var leafVisible = [];
+                    for (var li = 0; li < leafCells.length; li++) {
+                        if (leafCells[li].style.display === 'none') { leafVisible[li] = false; continue; }
+                        var t = normalize((leafCells[li].innerText || '').trim());
+                        if (t === 'status' || t === 'action') { leafVisible[li] = false; continue; }
+                        leafVisible[li] = true;
+                    }
+                    var pos = 0;
+                    parts.push('<table:table-row>');
+                    for (var gc = 0; gc < groupCells.length; gc++) {
+                        var span = Number(groupCells[gc].colSpan || 1) || 1;
+                        var text = (groupCells[gc].innerText || '').trim();
+                        var visCount = 0;
+                        for (var k = pos; k < pos + span && k < leafVisible.length; k++) if (leafVisible[k]) visCount++;
+                        if (visCount > 0) {
+                            var attrs = ' office:value-type="string"';
+                            if (visCount > 1) attrs = ' table:number-columns-spanned="' + String(visCount) + '" office:value-type="string"';
+                            parts.push('<table:table-cell' + attrs + '><text:p>' + xmlEscape(text) + '</text:p></table:table-cell>');
+                        }
+                        pos += span;
+                    }
+                    parts.push('</table:table-row>');
+                }
+
+                parts.push('<table:table-row>');
+                for (var i = 0; i < colHeaders.length; i++) {
+                    parts.push('<table:table-cell office:value-type="string"><text:p>' + xmlEscape(colHeaders[i]) + '</text:p></table:table-cell>');
+                }
+                parts.push('</table:table-row>');
+
+                for (var r = 0; r < rows.length; r++) {
+                    var tr = rows[r];
+                    parts.push('<table:table-row>');
+                    for (var c = 0; c < colIndices.length; c++) {
+                        var idx = colIndices[c];
+                        var colType = colTypes[c] || '';
+                        var text = tr.cells[idx] ? (tr.cells[idx].innerText || '').trim() : '';
+                        var headerName = normalize((leafCells[idx] && leafCells[idx].innerText) || '');
+                        if (headerName === 'rec#' || headerName === 'rec' || headerName === 'recno' || headerName === 'acqcst' || headerName === 'accdep' || headerName === 'bvalue' || colType === 'number' || colType === 'decimal') {
+                            var n = Number(String(text).replace(/,/g, ''));
+                            if (isFinite(n)) {
+                                parts.push('<table:table-cell office:value-type="float" office:value="' + String(n) + '"><text:p>' + xmlEscape(String(n)) + '</text:p></table:table-cell>');
+                            } else {
+                                parts.push('<table:table-cell office:value-type="string"><text:p>' + xmlEscape(text) + '</text:p></table:table-cell>');
+                            }
+                        } else {
+                            parts.push('<table:table-cell office:value-type="string"><text:p>' + xmlEscape(text) + '</text:p></table:table-cell>');
+                        }
+                    }
+                    parts.push('</table:table-row>');
+                }
+
+                parts.push('</table:table>');
+                parts.push('</office:spreadsheet></office:body>');
+                parts.push('</office:document>');
+
+                var xml = parts.join('');
+                var blob = new Blob([xml], { type: 'application/vnd.oasis.opendocument.spreadsheet;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+
+                var d = new Date();
+                var yyyy = String(d.getFullYear());
+                var mm = String(d.getMonth() + 1).padStart(2, '0');
+                var dd = String(d.getDate()).padStart(2, '0');
+                var filename = 'sss-inventory-records-' + yyyy + '-' + mm + '-' + dd + '.fods';
+
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+            }
+
+            function exportVisibleRowsToWordDoc() {
+                var theadRows = table.tHead ? table.tHead.rows : null;
+                var groupRow = (theadRows && theadRows.length > 1) ? theadRows[0] : null;
+                var leafRow = theadRows ? theadRows[theadRows.length - 1] : null;
+                var leafCells = leafRow ? leafRow.cells : [];
+                var colHeaders = [];
+                var colIndices = [];
+                for (var h = 0; h < leafCells.length; h++) {
+                    var headerText = (leafCells[h].innerText || '').trim();
+                    if (leafCells[h].style.display === 'none') continue;
+                    if (normalize(headerText) === 'status') continue;
+                    if (normalize(headerText) === 'action') continue;
+                    colHeaders.push(headerText);
+                    colIndices.push(h);
+                }
+
+                var rows = allMatchingRecordRows();
+                var bodyRowsHtml = [];
+                for (var r = 0; r < rows.length; r++) {
+                    var tr = rows[r];
+                    var tds = [];
+                    for (var c = 0; c < colHeaders.length; c++) {
+                        var txt = '';
+                        var idx = colIndices[c];
+                        if (tr.cells[idx]) txt = (tr.cells[idx].innerText || '').trim();
+                        tds.push('<td>' + htmlEscape(txt) + '</td>');
+                    }
+                    bodyRowsHtml.push('<tr>' + tds.join('') + '</tr>');
+                }
+
+                var now = new Date();
+                var yyyy = String(now.getFullYear());
+                var mm = String(now.getMonth() + 1).padStart(2, '0');
+                var dd = String(now.getDate()).padStart(2, '0');
+                var dateStr = yyyy + '-' + mm + '-' + dd;
+
+                var thTop = '';
+                if (groupRow) {
+                    var groupCells = groupRow.cells;
+                    var leafVisible = [];
+                    for (var li = 0; li < leafCells.length; li++) {
+                        if (leafCells[li].style.display === 'none') { leafVisible[li] = false; continue; }
+                        var t = normalize((leafCells[li].innerText || '').trim());
+                        if (t === 'status' || t === 'action') { leafVisible[li] = false; continue; }
+                        leafVisible[li] = true;
+                    }
+                    var pos = 0;
+                    var cellsOut = [];
+                    for (var gc = 0; gc < groupCells.length; gc++) {
+                        var span = Number(groupCells[gc].colSpan || 1) || 1;
+                        var text = (groupCells[gc].innerText || '').trim();
+                        var visCount = 0;
+                        for (var k = pos; k < pos + span && k < leafVisible.length; k++) if (leafVisible[k]) visCount++;
+                        if (visCount > 0) {
+                            var cs = visCount > 1 ? ' colspan="' + String(visCount) + '"' : '';
+                            cellsOut.push('<th' + cs + '>' + htmlEscape(text) + '</th>');
+                        }
+                        pos += span;
+                    }
+                    thTop = '<tr>' + cellsOut.join('') + '</tr>';
+                }
+                var thLeaf = [];
+                for (var i = 0; i < colHeaders.length; i++) thLeaf.push('<th>' + htmlEscape(colHeaders[i]) + '</th>');
+
+                var html = '';
+                html += '<!doctype html><html><head><meta charset="utf-8">';
+                html += '<title>SSS Inventory Records - ' + htmlEscape(dateStr) + '</title>';
+                html += '<style>body{font-family:Calibri,Arial,sans-serif;color:#000;margin:16px;} table{width:100%;border-collapse:collapse;font-size:11pt;} th,td{border:1px solid #666;padding:6px 8px;vertical-align:top;} th{background:#eee;}</style>';
+                html += '</head><body>';
+                html += '<h2>SSS Inventory Records</h2>';
+                html += '<div>Export date: ' + htmlEscape(dateStr) + ' | Rows: ' + String(bodyRowsHtml.length) + '</div>';
+                html += '<table><thead>' + thTop + '<tr>' + thLeaf.join('') + '</tr></thead><tbody>' + bodyRowsHtml.join('') + '</tbody></table>';
+                html += '</body></html>';
+
+                var blob = new Blob([html], { type: 'application/msword;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+                var filename = 'sss-inventory-records-' + yyyy + '-' + mm + '-' + dd + '.doc';
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+            }
+
+            // Apply imported file layout to the active sheet: labels, visibility, custom fields, and custom order
+            function applyImportedLayoutToSheet(targetSheetId) {
+                var headers = (importState && Array.isArray(importState.headers)) ? importState.headers.slice() : [];
+                var mapping = (importState && importState.mapping) ? importState.mapping : {};
+                if (!headers.length) return;
+
+                // Build reverse map: header index -> token
+                var indexToToken = {};
+                for (var i = 0; i < IMPORT_FIELDS.length; i++) {
+                    var k = IMPORT_FIELDS[i].key;
+                    var idx = mapping[k];
+                    if (idx !== '' && idx != null && isFinite(Number(idx))) indexToToken[Number(idx)] = k;
+                }
+
+                // Existing custom defs for this sheet
+                var defs = readCustomFields();
+                var defsChanged = false;
+                function findCustomByNameOrKey(name, sheetId) {
+                    var key = normalizeCustomFieldName(name);
+                    for (var i = 0; i < defs.length; i++) {
+                        var d = defs[i] || {};
+                        var dSid = d.sheetId == null ? '' : String(d.sheetId);
+                        if (dSid && sheetId && dSid !== sheetId) continue;
+                        if (String(d.nameKey || '') === key) return d;
+                        if (!d.nameKey && normalizeCustomFieldName(String(d.name || '')) === key) return d;
+                    }
+                    return null;
+                }
+                function ensureOrderSlot(def, sid, order) {
+                    if (!def.orderBySheet || typeof def.orderBySheet !== 'object') def.orderBySheet = {};
+                    if (def.orderBySheet[sid] !== order) { def.orderBySheet[sid] = order; defsChanged = true; }
+                }
+
+                // Assign tokens for custom fields present in mapping
+                for (var k in mapping) {
+                    if (!Object.prototype.hasOwnProperty.call(mapping, k)) continue;
+                    var idx = mapping[k];
+                    if (idx === '' || idx == null) continue;
+                    if (String(k).indexOf('custom:') === 0) indexToToken[Number(idx)] = String(k);
+                }
+
+                function isPlaceholderLabel(text) {
+                    var t = String(text == null ? '' : text).trim();
+                    return /^column\s+\d+$/i.test(t);
+                }
+
+                // Create missing custom fields for unmapped headers (skip placeholder Column N labels)
+                var sid = String(targetSheetId || '');
+                function parseMonthSubLocal(name) {
+                    var t = String(name == null ? '' : name).trim();
+                    if (!t) return null;
+                    var parts = t.split(' - ');
+                    if (parts.length >= 2 && /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i.test(parts[0])) {
+                        return { month: parts[0], sub: parts.slice(1).join(' - ') };
+                    }
+                    return null;
+                }
+                for (var h = 0; h < headers.length; h++) {
+                    var label = String(headers[h] == null ? '' : headers[h]);
+                    if (!label.trim()) continue;
+                    if (isPlaceholderLabel(label)) continue;
+                    if (indexToToken[h]) continue; // already mapped to a standard/custom
+                    // Create or reuse a custom field for this header under the target sheet
+                    var existing = findCustomByNameOrKey(label, sid);
+                    if (!existing) {
+                        var monthLike = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i.test(label);
+                        var p = parseMonthSubLocal(label);
+                        var newDef = {
+                            id: newId('cf'),
+                            name: label,
+                            nameKey: normalizeCustomFieldName(label),
+                            type: monthLike ? 'decimal' : 'text',
+                            required: false,
+                            sheetId: sid,
+                            orderBySheet: {},
+                            groupMonth: p ? p.month : '',
+                            groupChild: p ? p.sub : '',
+                            createdAt: new Date().toISOString(),
+                            updatedAt: new Date().toISOString()
+                        };
+                        newDef.orderBySheet[sid] = h;
+                        defs.push(newDef);
+                        defsChanged = true;
+                        indexToToken[h] = 'custom:' + String(newDef.id);
+                    } else {
+                        ensureOrderSlot(existing, sid, h);
+                        var p2 = parseMonthSubLocal(label);
+                        if (p2) {
+                            if (existing.groupMonth !== p2.month) { existing.groupMonth = p2.month; defsChanged = true; }
+                            if (existing.groupChild !== p2.sub) { existing.groupChild = p2.sub; defsChanged = true; }
+                        }
+                        indexToToken[h] = 'custom:' + String(existing.id);
+                    }
+                }
+                if (defsChanged) writeCustomFields(defs);
+
+                // Set header label overrides for present standard fields
+                for (var i2 = 0; i2 < IMPORT_FIELDS.length; i2++) {
+                    var key = IMPORT_FIELDS[i2].key;
+                    var idx2 = mapping[key];
+                    if (idx2 !== '' && idx2 != null && headers[idx2] != null) {
+                        var lbl = String(headers[idx2]);
+                        if (!isPlaceholderLabel(lbl) && lbl.trim()) {
+                            setHeaderLabelOverride(key, lbl, sid);
+                        } else {
+                            // ensure no stale override when source header is placeholder
+                            try {
+                                var wb2 = readWorkbook();
+                                if (wb2 && wb2.headerLabelsBySheet && wb2.headerLabelsBySheet[sid] && wb2.headerLabelsBySheet[sid][key]) {
+                                    delete wb2.headerLabelsBySheet[sid][key];
+                                    touchSheetUpdatedAt(wb2, sid);
+                                    writeWorkbook(wb2);
+                                }
+                            } catch (e) {}
+                        }
+                        setHiddenColumn(key, false, sid);
+                    } else {
+                        // hide standard columns not present
+                        setHiddenColumn(key, true, sid);
+                    }
+                }
+
+                // Hide custom fields not present; show and order those present
+                var defs2 = customFieldsForUse(sid);
+                var presentCustom = {};
+                for (var i3 = 0; i3 < headers.length; i3++) {
+                    var tok = indexToToken[i3];
+                    if (tok && String(tok).indexOf('custom:') === 0) presentCustom[String(tok).slice('custom:'.length)] = i3;
+                }
+                // Update order for present ones
+                var defsAll = readCustomFields();
+                var defsAllChanged = false;
+                for (var d0 = 0; d0 < defsAll.length; d0++) {
+                    var d = defsAll[d0] || {};
+                    var id = String(d.id || '');
+                    var dSid = d.sheetId == null ? '' : String(d.sheetId);
+                    if (dSid && dSid !== sid) continue;
+                    var ord = presentCustom[id];
+                    if (ord != null) {
+                        if (!d.orderBySheet || typeof d.orderBySheet !== 'object') d.orderBySheet = {};
+                        if (d.orderBySheet[sid] !== ord) { d.orderBySheet[sid] = ord; defsAllChanged = true; }
+                        setHiddenColumn('custom:' + id, false, sid);
+                    } else {
+                        setHiddenColumn('custom:' + id, true, sid);
+                    }
+                }
+                if (defsAllChanged) writeCustomFields(defsAll);
+
+                // Persist exact column order for this sheet based on the imported header order
+                var order = [];
+                for (var x = 0; x < headers.length; x++) {
+                    var tok = indexToToken[x];
+                    // Only keep recognized standard keys and created/mapped custom fields
+                    if (!tok) continue;
+                    if (String(tok).indexOf('custom:') === 0) {
+                        // ensure the custom id exists in defsAll
+                        var fid = String(tok).slice('custom:'.length);
+                        if (!fid) continue;
+                        order.push('custom:' + fid);
+                    } else {
+                        order.push(String(tok));
+                    }
+                }
+                try {
+                    var wb = readWorkbook();
+                    if (!wb.columnOrderBySheet || typeof wb.columnOrderBySheet !== 'object') wb.columnOrderBySheet = {};
+                    wb.columnOrderBySheet[sid] = order;
+                    touchSheetUpdatedAt(wb, sid);
+                    writeWorkbook(wb);
+                } catch (e) {}
+            }
+
+            var user = sessionStorage.getItem(USER_KEY) || 'User';
+            var userChip = document.getElementById('userChip');
+            var logoutBtn = document.getElementById('logoutBtn');
+            var toast = document.getElementById('toast');
+            var search = document.getElementById('search');
+            var deptFilter = document.getElementById('deptFilter');
+            var costFilter = document.getElementById('costFilter');
+            var resetFiltersBtn = document.getElementById('resetFiltersBtn');
+            var table = document.getElementById('invTable');
+            var tbody = document.getElementById('recordsBody');
+            var pagination = document.getElementById('pagination');
+            var exportFormat = document.getElementById('exportFormat');
+            var exportBtn = document.getElementById('exportBtn');
+            var clearRecordsBtn = document.getElementById('clearRecordsBtn');
+            var emptyState = document.getElementById('emptyState');
+            var noMatchState = document.getElementById('noMatchState');
+            var tableWrap = document.getElementById('tableWrap');
+            var totalAcqcstEl = document.getElementById('totalAcqcst');
+            var totalAccdepEl = document.getElementById('totalAccdep');
+            var totalBvalueEl = document.getElementById('totalBvalue');
+            var totalRecordCountEl = document.getElementById('totalRecordCount');
+
+            var sheetBar = document.getElementById('sheetBar');
+            var sheetTabs = document.getElementById('sheetTabs');
+            var addSheetBtn = document.getElementById('addSheetBtn');
+            var renameSheetBtn = document.getElementById('renameSheetBtn');
+            var duplicateSheetBtn = document.getElementById('duplicateSheetBtn');
+            var deleteSheetBtn = document.getElementById('deleteSheetBtn');
+            var addRecordLink = document.getElementById('addRecordLink');
+
+            var importFile = document.getElementById('importFile');
+            var importTargetSheet = document.getElementById('importTargetSheet');
+            var parseImportBtn = document.getElementById('parseImportBtn');
+            var importConfirmBtn = document.getElementById('importConfirmBtn');
+            var downloadImportReportBtn = document.getElementById('downloadImportReportBtn');
+            var importBody = document.getElementById('importBody');
+            var importMapping = document.getElementById('importMapping');
+            var importHint = document.getElementById('importHint');
+            var importPreviewWrap = document.getElementById('importPreviewWrap');
+            var importPreviewHead = document.getElementById('importPreviewHead');
+            var importPreviewBody = document.getElementById('importPreviewBody');
+
+            var PAGE_SIZE = 10;
+            var PAGE_WINDOW_SIZE = 5;
+            var SHOW_NO_LAST_NAME_LABEL = false;
+            var NO_LAST_NAME_LABEL = 'No Last Name';
+            var currentPage = 1;
+
+            var AUDIT_PAGE_SIZE = 10;
+            var auditCurrentPage = 1;
+
+            var auditSearch = document.getElementById('auditSearch');
+            var auditDateFrom = document.getElementById('auditDateFrom');
+            var auditDateTo = document.getElementById('auditDateTo');
+            var auditUserFilter = document.getElementById('auditUserFilter');
+            var auditActionFilter = document.getElementById('auditActionFilter');
+            var auditModuleFilter = document.getElementById('auditModuleFilter');
+            var clearAuditBtn = document.getElementById('clearAuditBtn');
+            var auditBody = document.getElementById('auditBody');
+            var auditPagination = document.getElementById('auditPagination');
+            var auditExportFormat = document.getElementById('auditExportFormat');
+            var auditExportBtn = document.getElementById('auditExportBtn');
+
+            var recordAuditModal = document.getElementById('recordAuditModal');
+            var recordAuditCloseBtn = document.getElementById('recordAuditCloseBtn');
+            var recordAuditSubtitle = document.getElementById('recordAuditSubtitle');
+            var recordAuditSummary = document.getElementById('recordAuditSummary');
+            var recordAuditNoChanges = document.getElementById('recordAuditNoChanges');
+            var recordAuditChangesWrap = document.getElementById('recordAuditChangesWrap');
+            var recordAuditChangesBody = document.getElementById('recordAuditChangesBody');
+
+            var auditCache = [];
+            var auditFilteredEntries = [];
+
+            userChip.textContent = 'Signed in as ' + user;
+
+            function isCustomFieldsAdmin() {
+                return !!CUSTOM_FIELDS_ADMIN_USERS[String(user || '')];
+            }
+
+            function readCustomFields() {
+                try {
+                    var raw = localStorage.getItem(CUSTOM_FIELDS_KEY);
+                    if (!raw) return [];
+                    var data = JSON.parse(raw);
+                    return Array.isArray(data) ? data : [];
+                } catch (e) {
+                    return [];
+                }
+            }
+
+            function writeCustomFields(fields) {
+                localStorage.setItem(CUSTOM_FIELDS_KEY, JSON.stringify(fields || []));
+            }
+
+            function normalizeCustomFieldName(value) {
+                return normalizeHeader(value);
+            }
+
+            function customFieldsForUse() {
+                var list = readCustomFields();
+                var sid = '';
+                if (arguments.length) {
+                    sid = String(arguments[0] || '');
+                } else {
+                    try {
+                        sid = String(readWorkbook().activeSheetId || '');
+                    } catch (e) {
+                        sid = '';
+                    }
+                }
+
+                var filtered = [];
+                for (var i = 0; i < list.length; i++) {
+                    var d = list[i] || {};
+                    var dSid = d.sheetId == null ? '' : String(d.sheetId);
+                    if (!dSid || !sid || dSid === sid) filtered.push(d);
+                }
+
+                filtered.sort(function (a, b) {
+                    var an = String(a && a.name || '');
+                    var bn = String(b && b.name || '');
+                    return an.localeCompare(bn);
+                });
+                return filtered;
+            }
+
+            window.addEventListener('storage', function (e) {
+                try {
+                    if (!e) return;
+                    if (String(e.key || '') !== String(CUSTOM_FIELDS_KEY)) return;
+                    if (importBody && importBody.style.display !== 'none' && importState && importState.headers && importState.headers.length) {
+                        importState.mapping = defaultMapping(importState.headers);
+                        renderImportMapping(importState.headers);
+                        readMappingFromUi();
+                        var stats = validateImport();
+                        renderImportPreview(stats);
+                    }
+                    var records = currentRecords();
+                    renderRecords(records);
+                    applyFilter(search.value);
+                } catch (err) {
+                }
+            });
+
+            function showToast(message) {
+                if (!toast) return;
+                toast.textContent = message;
+                toast.classList.remove('is-hide');
+                toast.style.display = 'block';
+                setTimeout(function () {
+                    toast.classList.add('is-show');
+                }, 0);
+
+                setTimeout(function () {
+                    toast.classList.remove('is-show');
+                    toast.classList.add('is-hide');
+                    setTimeout(function () {
+                        toast.style.display = 'none';
+                    }, 220);
+                }, 2500);
+            }
+
+            try {
+                var rawToast = sessionStorage.getItem(TOAST_KEY);
+                if (rawToast) {
+                    sessionStorage.removeItem(TOAST_KEY);
+                    var t = JSON.parse(rawToast);
+                    if (t && t.message) showToast(String(t.message));
+                }
+            } catch (e) {
+            }
+
+            logoutBtn.addEventListener('click', function () {
+                appendAudit({
+                    action: 'logout',
+                    module: 'auth',
+                    user: user,
+                    tsIso: new Date().toISOString(),
+                    details: 'User signed out'
+                });
+                sessionStorage.removeItem(AUTH_KEY);
+                sessionStorage.removeItem(USER_KEY);
+                window.location.replace('login.html');
+            });
+
+            function normalize(value) {
+                return (value || '').toLowerCase().trim();
+            }
+
+            function parseStatusSearch(query) {
+                var q = normalize(query);
+                var status = '';
+
+                if (q.indexOf('no change') !== -1) {
+                    status = 'no_change';
+                    q = q.replace(/no\s+change/g, ' ');
+                }
+
+                if (q.indexOf('nochange') !== -1) {
+                    status = 'no_change';
+                    q = q.replace(/nochange/g, ' ');
+                }
+
+                if (q.indexOf('unchanged') !== -1) {
+                    status = 'no_change';
+                    q = q.replace(/unchanged/g, ' ');
+                }
+
+                if (q.indexOf('updated') !== -1) {
+                    status = 'updated';
+                    q = q.replace(/updated/g, ' ');
+                }
+
+                q = normalize(q.replace(/\s+/g, ' '));
+                var tokens = q ? q.split(' ') : [];
+                return { status: status, tokens: tokens };
+            }
+
+            function recordLabelFromRecord(rec) {
+                var a = String(rec && rec.deptcd != null ? rec.deptcd : '').trim();
+                var b = String(rec && rec.tmnum != null ? rec.tmnum : '').trim();
+                if (!a && !b) return '';
+                return a + ' / ' + b;
+            }
+
+            function findLatestUpdateAuditForRecordId(recordId) {
+                if (!recordId) return null;
+                var list = auditCache && auditCache.length ? auditCache : readAudit();
+                var best = null;
+                for (var i = 0; i < list.length; i++) {
+                    var e = list[i] || {};
+                    if (String(e.recordId || '') !== String(recordId)) continue;
+                    if (normalize(e.action || '') !== 'update') continue;
+                    if (!e.changes || !e.changes.length) continue;
+                    if (!best) {
+                        best = e;
+                        continue;
+                    }
+                    var bt = Date.parse(best.tsIso || best.ts || '') || 0;
+                    var et = Date.parse(e.tsIso || e.ts || '') || 0;
+                    if (et > bt) best = e;
+                }
+                return best;
+            }
+
+            function findRecordById(recordId) {
+                if (!recordId) return null;
+                var list = currentRecords();
+                for (var i = 0; i < list.length; i++) {
+                    if (String(list[i] && list[i].id || '') === String(recordId)) return list[i];
+                }
+                return null;
+            }
+
+            function openRecordAuditModal(auditEntry, recordLabel, recordId) {
+                if (!recordAuditModal) return;
+
+                recordAuditModal.style.display = 'block';
+                recordAuditModal.setAttribute('aria-hidden', 'false');
+
+                if (recordAuditSubtitle) recordAuditSubtitle.textContent = recordLabel ? ('RECORD: ' + recordLabel) : '';
+
+                var record = recordId ? findRecordById(recordId) : null;
+                var customDefs = customFieldsForUse();
+                var customValues = (record && record.custom && typeof record.custom === 'object') ? record.custom : {};
+                var customLines = [];
+                if (customDefs && customDefs.length) {
+                    customLines.push('<div class="line"><span class="label">CUSTOM FIELDS:</span></div>');
+                    for (var c = 0; c < customDefs.length; c++) {
+                        var d = customDefs[c] || {};
+                        var fid = String(d.id || '');
+                        if (!fid) continue;
+                        var v = customValues[fid];
+                        var vs = v == null ? '' : String(v);
+                        customLines.push('<div class="line"><span class="label">' + htmlEscape(String(d.name || '')) + ':</span> ' + htmlEscape(vs || '-') + '</div>');
+                    }
+                }
+
+                if (!auditEntry) {
+                    if (recordAuditSummary) {
+                        var s = [];
+                        if (recordLabel) s.push('<div class="line"><span class="label">RECORD:</span> ' + htmlEscape(recordLabel) + '</div>');
+                        if (customLines.length) s = s.concat(customLines);
+                        recordAuditSummary.innerHTML = s.join('');
+                    }
+                    if (recordAuditNoChanges) recordAuditNoChanges.style.display = 'block';
+                    if (recordAuditChangesWrap) recordAuditChangesWrap.style.display = 'none';
+                    if (recordAuditChangesBody) recordAuditChangesBody.innerHTML = '';
+                    return;
+                }
+
+                var e = buildAuditEntry(auditEntry);
+                var filteredChanges = [];
+                if (e.changes && e.changes.length) {
+                    for (var ci = 0; ci < e.changes.length; ci++) {
+                        var ch0 = e.changes[ci] || {};
+                        var ov0 = ch0.oldValue == null ? '' : String(ch0.oldValue);
+                        var nv0 = ch0.newValue == null ? '' : String(ch0.newValue);
+                        if (ov0 === nv0) continue;
+                        filteredChanges.push(ch0);
+                    }
+                }
+
+                var actionLabel = String(e.action || '').toUpperCase() + (filteredChanges.length ? ' – Changes' : '');
+                var summaryLines = [];
+                summaryLines.push('<div class="line"><span class="label">TIME:</span> ' + htmlEscape(e.tsPht || formatPht(e.tsIso)) + ' (PHT)</div>');
+                summaryLines.push('<div class="line"><span class="label">USER:</span> ' + htmlEscape(e.user || '') + '</div>');
+                summaryLines.push('<div class="line"><span class="label">ACTION:</span> ' + htmlEscape(actionLabel) + '</div>');
+                summaryLines.push('<div class="line"><span class="label">MODULE:</span> ' + htmlEscape(e.module || '') + '</div>');
+                summaryLines.push('<div class="line"><span class="label">RECORD:</span> ' + htmlEscape(recordLabel || e.recordLabel || e.recordId || '') + '</div>');
+                summaryLines.push('<div class="line"><span class="label">DETAILS:</span> ' + htmlEscape(e.details || '') + '</div>');
+                if (customLines.length) summaryLines = summaryLines.concat(customLines);
+                if (recordAuditSummary) recordAuditSummary.innerHTML = summaryLines.join('');
+
+                var hasChanges = filteredChanges.length > 0;
+                if (recordAuditNoChanges) recordAuditNoChanges.style.display = hasChanges ? 'none' : 'block';
+                if (recordAuditChangesWrap) recordAuditChangesWrap.style.display = hasChanges ? 'block' : 'none';
+                if (recordAuditChangesBody) recordAuditChangesBody.innerHTML = '';
+
+                if (hasChanges && recordAuditChangesBody) {
+                    for (var i = 0; i < filteredChanges.length; i++) {
+                        var ch = filteredChanges[i] || {};
+                        var tr = document.createElement('tr');
+                        var td1 = document.createElement('td');
+                        td1.textContent = ch.field || '';
+                        var td2 = document.createElement('td');
+                        td2.textContent = ch.oldValue == null ? '' : String(ch.oldValue);
+                        var td3 = document.createElement('td');
+                        td3.textContent = ch.newValue == null ? '' : String(ch.newValue);
+                        tr.appendChild(td1);
+                        tr.appendChild(td2);
+                        tr.appendChild(td3);
+                        recordAuditChangesBody.appendChild(tr);
+                    }
+                }
+            }
+
+            function closeRecordAuditModal() {
+                if (!recordAuditModal) return;
+                recordAuditModal.style.display = 'none';
+                recordAuditModal.setAttribute('aria-hidden', 'true');
+            }
+
+            function formatPht(iso) {
+                try {
+                    var d = iso ? new Date(iso) : new Date();
+                    return new Intl.DateTimeFormat('en-PH', {
+                        timeZone: 'Asia/Manila',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true
+                    }).format(d);
+                } catch (e) {
+                    return iso || new Date().toISOString();
+                }
+            }
+
+            function phtDate(iso) {
+                try {
+                    var d = iso ? new Date(iso) : new Date();
+                    var parts = new Intl.DateTimeFormat('en-CA', {
+                        timeZone: 'Asia/Manila',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    }).formatToParts(d);
+
+                    var y = '';
+                    var m = '';
+                    var da = '';
+                    for (var i = 0; i < parts.length; i++) {
+                        if (parts[i].type === 'year') y = parts[i].value;
+                        if (parts[i].type === 'month') m = parts[i].value;
+                        if (parts[i].type === 'day') da = parts[i].value;
+                    }
+                    return y + '-' + m + '-' + da;
+                } catch (e) {
+                    return '';
+                }
+            }
+
+            function normalizeAuditAction(action) {
+                var a = normalize(action);
+                if (a === 'export_audit') return 'export';
+                if (a === 'clear_all') return 'clear';
+                if (a === 'seed') return 'import';
+                if (a === 'event') return 'system';
+                if (a === 'clear') return 'clear';
+                if (a === 'create') return 'create';
+                if (a === 'update') return 'update';
+                if (a === 'delete') return 'delete';
+                if (a === 'import') return 'import';
+                if (a === 'export') return 'export';
+                if (a === 'login') return 'login';
+                if (a === 'logout') return 'logout';
+                return a || 'system';
+            }
+
+            function normalizeAuditModule(module) {
+                var m = normalize(module);
+                if (m === 'auth') return 'auth';
+                if (m === 'records') return 'records';
+                if (m === 'import') return 'import';
+                if (m === 'audit') return 'audit';
+                if (m === 'system') return 'system';
+                return m || 'system';
+            }
+
+            function buildAuditEntry(entry) {
+                var tsIso = entry.tsIso || entry.ts || new Date().toISOString();
+                var action = normalizeAuditAction(entry.action);
+                var module = normalizeAuditModule(entry.module);
+                var userName = entry.user || user;
+                var changes = Array.isArray(entry.changes) ? entry.changes : [];
+                var id = entry.id || (Date.now() + '-' + Math.random().toString(16).slice(2));
+
+                return {
+                    id: id,
+                    tsIso: tsIso,
+                    tsPht: entry.tsPht || formatPht(tsIso),
+                    datePht: entry.datePht || phtDate(tsIso),
+                    user: userName,
+                    action: action,
+                    module: module,
+                    recordId: entry.recordId || '',
+                    recordLabel: entry.recordLabel || '',
+                    changes: changes,
+                    details: entry.details || ''
+                };
+            }
+
+            function compareRecordsByLastName(a, b) {
+                function isBlankKeyRecord(r) {
+                    function isBlankText(v) {
+                        return String(v == null ? '' : v).trim() === '';
+                    }
+
+                    function isZeroOrBlankNumber(v) {
+                        var s = String(v == null ? '' : v).trim();
+                        if (!s) return true;
+                        var n = Number(s.replace(/,/g, ''));
+                        return !isFinite(n) || n === 0;
+                    }
+
+                    if (!r) return true;
+
+                    var blankTextFields =
+                        isBlankText(r.deptcd) &&
+                        isBlankText(r.deptbranch) &&
+                        isBlankText(r.tmnum) &&
+                        isBlankText(r.pronum) &&
+                        isBlankText(r.acqdte) &&
+                        isBlankText(r.usercd) &&
+                        isBlankText(r.lastname) &&
+                        isBlankText(r.firstname) &&
+                        isBlankText(r.middlename);
+
+                    if (!blankTextFields) return false;
+
+                    return (
+                        isZeroOrBlankNumber(r.acqcst) &&
+                        isZeroOrBlankNumber(r.accdep) &&
+                        isZeroOrBlankNumber(r.bvalue)
+                    );
+                }
+
+                function classifyLastName(v) {
+                    var raw = String(v == null ? '' : v).trim();
+                    if (!raw) return { group: 1, key: '' };
+
+                    var s = normalize(raw);
+                    if (s === normalize(NO_LAST_NAME_LABEL)) return { group: 2, key: '' };
+                    if (s === '#n/a' || s === 'n/a') return { group: 2, key: '' };
+
+                    var lettersOnly = s.replace(/[^a-z]/g, '');
+                    if (s.charAt(0) === '#' && lettersOnly === 'na') return { group: 2, key: '' };
+
+                    var hasLetter = /[a-z]/i.test(raw);
+                    if (!hasLetter) return { group: 2, key: '' };
+
+                    return { group: 0, key: s };
+                }
+
+                var aBlank = isBlankKeyRecord(a);
+                var bBlank = isBlankKeyRecord(b);
+                if (aBlank !== bBlank) return aBlank ? 1 : -1;
+
+                var aa = classifyLastName(a && a.lastname);
+                var bb = classifyLastName(b && b.lastname);
+
+                if (aa.group !== bb.group) return aa.group - bb.group;
+
+                if (aa.group === 0) {
+                    var c = aa.key.localeCompare(bb.key);
+                    if (c !== 0) return c;
+                }
+
+                var af = normalize(a && a.firstname);
+                var bf = normalize(b && b.firstname);
+                var c0 = af.localeCompare(bf);
+                if (c0 !== 0) return c0;
+
+                var am = normalize(a && a.middlename);
+                var bm = normalize(b && b.middlename);
+                var c0m = am.localeCompare(bm);
+                if (c0m !== 0) return c0m;
+
+                var aid = String(a && a.id ? a.id : '');
+                var bid = String(b && b.id ? b.id : '');
+                return aid.localeCompare(bid);
+            }
+
+            function normalizeHeader(value) {
+                return String(value == null ? '' : value)
+                    .toLowerCase()
+                    .replace(/\s+/g, '')
+                    .replace(/[^a-z0-9]/g, '');
+            }
+
+            function dateToTs(value) {
+                var s = (value || '').trim();
+                if (!s) return NaN;
+
+                var m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+                if (m) return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+
+                m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+                if (m) {
+                    var a = Number(m[1]);
+                    var b = Number(m[2]);
+                    var y = Number(m[3]);
+
+                    var month = a;
+                    var day = b;
+
+                    if (a > 12 && b <= 12) {
+                        day = a;
+                        month = b;
+                    } else if (b > 12 && a <= 12) {
+                        month = a;
+                        day = b;
+                    }
+
+                    return Date.UTC(y, month - 1, day);
+                }
+
+                var parsed = Date.parse(s);
+                if (!isFinite(parsed)) return NaN;
+                var d = new Date(parsed);
+                return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+            }
+
+            function tsToIsoDate(ts) {
+                if (!isFinite(ts)) return '';
+                var d = new Date(ts);
+                var yyyy = String(d.getUTCFullYear());
+                var mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+                var dd = String(d.getUTCDate()).padStart(2, '0');
+                return yyyy + '-' + mm + '-' + dd;
+            }
+
+            function normalizeNumber(value) {
+                var s = (value == null ? '' : String(value)).trim();
+                if (!s) return '';
+                if (s.replace(/\s/g, '') === '-') return '';
+                s = s.replace(/,/g, '');
+                var n = Number(s);
+                if (!isFinite(n)) return '';
+                var rounded = Math.round(n * 1e6) / 1e6;
+                var out = rounded.toFixed(6).replace(/\.?0+$/, '');
+                return out;
+            }
+
+            function normalizeDate(value) {
+                var s = (value == null ? '' : String(value)).trim();
+                if (!s) return '';
+                if (s.replace(/\s/g, '') === '-') return '';
+                var ts = dateToTs(s);
+                return tsToIsoDate(ts);
+            }
+
+            function excelSerialToIso(serial) {
+                if (!isFinite(serial)) return '';
+                try {
+                    if (window.XLSX && XLSX.SSF && XLSX.SSF.parse_date_code) {
+                        var dc = XLSX.SSF.parse_date_code(serial);
+                        if (dc && dc.y && dc.m && dc.d) {
+                            var mm = String(dc.m).padStart(2, '0');
+                            var dd = String(dc.d).padStart(2, '0');
+                            return String(dc.y) + '-' + mm + '-' + dd;
+                        }
+                    }
+                } catch (e) {
+                }
+
+                var base = Date.UTC(1899, 11, 30);
+                var ts = base + Math.round(serial) * 86400000;
+                return tsToIsoDate(ts);
+            }
+
+            function cellToText(cell, fieldKey) {
+                if (cell == null) return '';
+                if (cell instanceof Date) {
+                    var y = cell.getFullYear();
+                    var m = String(cell.getMonth() + 1).padStart(2, '0');
+                    var d = String(cell.getDate()).padStart(2, '0');
+                    return String(y) + '-' + m + '-' + d;
+                }
+                if (typeof cell === 'number') {
+                    if (fieldKey === 'acqdte') return excelSerialToIso(cell);
+                    return String(cell);
+                }
+                return String(cell);
+            }
+
+            function setImportHint(message) {
+                if (!importHint) return;
+                importHint.textContent = message || '';
+            }
+
+            if (recordAuditModal) {
+                recordAuditModal.addEventListener('click', function (e) {
+                    var t = e.target;
+                    if (!t) return;
+                    if (t.matches('[data-action="close-record-audit"]')) {
+                        closeRecordAuditModal();
+                    }
+                });
+            }
+
+            if (recordAuditCloseBtn) {
+                recordAuditCloseBtn.addEventListener('click', function () {
+                    closeRecordAuditModal();
+                });
+            }
+
+            document.addEventListener('keydown', function (e) {
+                if (!recordAuditModal) return;
+                if (recordAuditModal.style.display === 'none') return;
+                if (e.key === 'Escape') {
+                    closeRecordAuditModal();
+                }
+            });
+
+            function stringifyChanges(changes) {
+                if (!changes || !changes.length) return '';
+                var parts = [];
+                for (var i = 0; i < changes.length; i++) {
+                    var c = changes[i] || {};
+                    var field = c.field || '';
+                    var ov = c.oldValue == null ? '' : String(c.oldValue);
+                    var nv = c.newValue == null ? '' : String(c.newValue);
+                    parts.push(field + ': ' + ov + ' -> ' + nv);
+                }
+                return parts.join(' | ');
+            }
+
+            function getAuditExportSnapshot() {
+                return auditFilteredEntries.slice();
+            }
+
+            function exportAuditToDelimited(format, entries) {
+                var delimiter = format === 'tsv' ? '\t' : ',';
+                var extension = format === 'tsv' ? 'tsv' : 'csv';
+
+                var headers = ['TIME (PHT)', 'USER', 'ACTION', 'MODULE', 'RECORD', 'DETAILS', 'CHANGES'];
+                var lines = [];
+                lines.push(headers.map(function (h) { return escapeDelimited(excelSafeText(h), delimiter); }).join(delimiter));
+
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i] || {};
+                    var out = [];
+                    out.push(escapeDelimited(excelSafeText(e.tsPht || formatPht(e.tsIso)), delimiter));
+                    out.push(escapeDelimited(excelSafeText(e.user || ''), delimiter));
+                    out.push(escapeDelimited(excelSafeText(e.action || ''), delimiter));
+                    out.push(escapeDelimited(excelSafeText(e.module || ''), delimiter));
+                    out.push(escapeDelimited(excelSafeText(e.recordLabel || e.recordId || ''), delimiter));
+                    out.push(escapeDelimited(excelSafeText(e.details || ''), delimiter));
+                    out.push(escapeDelimited(excelSafeText(stringifyChanges(e.changes || [])), delimiter));
+                    lines.push(out.join(delimiter));
+                }
+
+                var content = '\ufeff' + lines.join('\r\n');
+                var mime = format === 'tsv' ? 'text/tab-separated-values;charset=utf-8;' : 'text/csv;charset=utf-8;';
+                var blob = new Blob([content], { type: mime });
+                var url = URL.createObjectURL(blob);
+
+                var d = new Date();
+                var yyyy = String(d.getFullYear());
+                var mm = String(d.getMonth() + 1).padStart(2, '0');
+                var dd = String(d.getDate()).padStart(2, '0');
+                var filename = 'sss-audit-trail-' + yyyy + '-' + mm + '-' + dd + '.' + extension;
+
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () {
+                    URL.revokeObjectURL(url);
+                }, 0);
+            }
+
+            function exportAuditToSpreadsheetXml(entries) {
+                var headers = ['TIME (PHT)', 'USER', 'ACTION', 'MODULE', 'RECORD', 'DETAILS', 'CHANGES'];
+
+                var parts = [];
+                parts.push('<?xml version="1.0" encoding="UTF-8"?>');
+                parts.push('<?mso-application progid="Excel.Sheet"?>');
+                parts.push('<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">');
+                parts.push('<Worksheet ss:Name="Audit">');
+                parts.push('<Table>');
+
+                parts.push('<Row>');
+                for (var h = 0; h < headers.length; h++) {
+                    parts.push('<Cell><Data ss:Type="String">' + xmlEscape(headers[h]) + '</Data></Cell>');
+                }
+                parts.push('</Row>');
+
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i] || {};
+                    var row = [
+                        e.tsPht || formatPht(e.tsIso),
+                        e.user || '',
+                        e.action || '',
+                        e.module || '',
+                        e.recordLabel || e.recordId || '',
+                        e.details || '',
+                        stringifyChanges(e.changes || [])
+                    ];
+                    parts.push('<Row>');
+                    for (var c = 0; c < row.length; c++) {
+                        parts.push('<Cell><Data ss:Type="String">' + xmlEscape(excelSafeText(row[c] || '')) + '</Data></Cell>');
+                    }
+                    parts.push('</Row>');
+                }
+
+                parts.push('</Table>');
+                parts.push('</Worksheet>');
+                parts.push('</Workbook>');
+
+                var xml = parts.join('');
+                var blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+
+                var d = new Date();
+                var yyyy = String(d.getFullYear());
+                var mm = String(d.getMonth() + 1).padStart(2, '0');
+                var dd = String(d.getDate()).padStart(2, '0');
+                var filename = 'sss-audit-trail-' + yyyy + '-' + mm + '-' + dd + '.xml';
+
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () {
+                    URL.revokeObjectURL(url);
+                }, 0);
+            }
+
+            function exportAuditToPdf(entries) {
+                var now = new Date();
+                var yyyy = String(now.getFullYear());
+                var mm = String(now.getMonth() + 1).padStart(2, '0');
+                var dd = String(now.getDate()).padStart(2, '0');
+                var dateStr = yyyy + '-' + mm + '-' + dd;
+
+                var ths = ['TIME (PHT)', 'USER', 'ACTION', 'MODULE', 'RECORD', 'DETAILS', 'CHANGES'].map(function (h) {
+                    return '<th>' + htmlEscape(h) + '</th>';
+                });
+
+                var bodyRowsHtml = [];
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i] || {};
+                    var row = [
+                        e.tsPht || formatPht(e.tsIso),
+                        e.user || '',
+                        e.action || '',
+                        e.module || '',
+                        e.recordLabel || e.recordId || '',
+                        e.details || '',
+                        stringifyChanges(e.changes || [])
+                    ];
+                    var tds = [];
+                    for (var c = 0; c < row.length; c++) {
+                        tds.push('<td>' + htmlEscape(row[c] || '') + '</td>');
+                    }
+                    bodyRowsHtml.push('<tr>' + tds.join('') + '</tr>');
+                }
+
+                var logoSrc = 'images/logo-v1.png';
+                var reportHtml = '';
+                reportHtml += '<!doctype html><html><head><meta charset="utf-8">';
+                reportHtml += '<title>SSS Audit Trail - ' + htmlEscape(dateStr) + '</title>';
+                reportHtml += '<style>';
+                reportHtml += 'body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:24px;}';
+                reportHtml += '.header{display:flex;align-items:center;gap:14px;margin-bottom:16px;}';
+                reportHtml += '.header img{height:40px;width:auto;}';
+                reportHtml += '.title{font-size:18px;font-weight:700;line-height:1.2;}';
+                reportHtml += '.sub{font-size:12px;color:#475569;margin-top:2px;}';
+                reportHtml += 'table{width:100%;border-collapse:collapse;font-size:11px;}';
+                reportHtml += 'th,td{border:1px solid #cbd5e1;padding:6px 8px;vertical-align:top;}';
+                reportHtml += 'th{background:#f1f5f9;font-weight:700;text-align:left;position:sticky;top:0;}';
+                reportHtml += '@page{size:portrait;margin:12mm;}';
+                reportHtml += '@media print{body{margin:0;} .no-print{display:none;}}';
+                reportHtml += '</style>';
+                reportHtml += '</head><body>';
+                reportHtml += '<div class="header">';
+                reportHtml += '<img src="' + htmlEscape(logoSrc) + '" alt="SSS">';
+                reportHtml += '<div><div class="title">SSS Audit Trail</div><div class="sub">Export date: ' + htmlEscape(dateStr) + ' | Rows: ' + String(entries.length) + '</div></div>';
+                reportHtml += '</div>';
+                reportHtml += '<table><thead><tr>' + ths.join('') + '</tr></thead><tbody>' + bodyRowsHtml.join('') + '</tbody></table>';
+                reportHtml += '<script>window.onload=function(){setTimeout(function(){window.print();},200);};<\/script>';
+                reportHtml += '</body></html>';
+
+                var win = window.open('', '_blank');
+                if (!win) {
+                    alert('Popup blocked. Please allow popups to export PDF.');
+                    return;
+                }
+                win.document.open();
+                win.document.write(reportHtml);
+                win.document.close();
+            }
+
+            if (auditExportBtn) {
+                auditExportBtn.addEventListener('click', function () {
+                    var entries = getAuditExportSnapshot();
+                    var format = auditExportFormat ? auditExportFormat.value : 'csv';
+
+                    appendAudit({
+                        action: 'export',
+                        module: 'audit',
+                        user: user,
+                        tsIso: new Date().toISOString(),
+                        details: 'Format: ' + String(format) + ' | Rows: ' + String(entries.length)
+                    });
+
+                    if (format === 'pdf') {
+                        exportAuditToPdf(entries);
+                    } else if (format === 'excel') {
+                        exportAuditToSpreadsheetXml(entries);
+                    } else {
+                        exportAuditToDelimited('csv', entries);
+                    }
+                });
+            }
+
+            function readRecords() {
+                var wb = readWorkbook();
+                var sid = String(wb.activeSheetId || '');
+                var list = (wb.recordsBySheet && wb.recordsBySheet[sid]) ? wb.recordsBySheet[sid] : [];
+                return Array.isArray(list) ? list : [];
+            }
+
+            function writeRecords(records) {
+                var wb = readWorkbook();
+                var sid = String(wb.activeSheetId || '');
+                if (!wb.recordsBySheet) wb.recordsBySheet = {};
+                wb.recordsBySheet[sid] = Array.isArray(records) ? records : [];
+                touchSheetUpdatedAt(wb, sid);
+                writeWorkbook(wb);
+            }
+
+            function newId(prefix) {
+                return String(prefix || 'id') + '-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+            }
+
+            function defaultWorkbookFromLegacyArray(records) {
+                var sid = newId('sheet');
+                var now = new Date().toISOString();
+                return {
+                    version: 1,
+                    activeSheetId: sid,
+                    sheets: [{ id: sid, name: 'Sheet 1', createdAt: now, updatedAt: now }],
+                    recordsBySheet: (function () {
+                        var map = {};
+                        map[sid] = sanitizeRecords(records || []);
+                        return map;
+                    })()
+                };
+            }
+
+            function normalizeWorkbookShape(wb) {
+                var now = new Date().toISOString();
+                if (!wb || typeof wb !== 'object') wb = {};
+                if (!Array.isArray(wb.sheets)) wb.sheets = [];
+                if (!wb.recordsBySheet || typeof wb.recordsBySheet !== 'object') wb.recordsBySheet = {};
+                if (!wb.sheets.length) {
+                    var sid = newId('sheet');
+                    wb.sheets.push({ id: sid, name: 'Sheet 1', createdAt: now, updatedAt: now });
+                    wb.recordsBySheet[sid] = [];
+                    wb.activeSheetId = sid;
+                }
+                if (!wb.activeSheetId) wb.activeSheetId = String(wb.sheets[0].id || '');
+                var found = false;
+                for (var i = 0; i < wb.sheets.length; i++) {
+                    if (String(wb.sheets[i] && wb.sheets[i].id || '') === String(wb.activeSheetId)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) wb.activeSheetId = String(wb.sheets[0].id || '');
+                for (var i = 0; i < wb.sheets.length; i++) {
+                    var sid2 = String(wb.sheets[i] && wb.sheets[i].id || '');
+                    if (!sid2) continue;
+                    if (!Array.isArray(wb.recordsBySheet[sid2])) wb.recordsBySheet[sid2] = [];
+                    if (!wb.sheets[i].createdAt) wb.sheets[i].createdAt = now;
+                    if (!wb.sheets[i].updatedAt) wb.sheets[i].updatedAt = now;
+                }
+                if (!wb.version) wb.version = 1;
+                return wb;
+            }
+
+            function readWorkbook() {
+                try {
+                    var raw = localStorage.getItem(RECORDS_KEY);
+                    if (!raw) {
+                        var empty = defaultWorkbookFromLegacyArray([]);
+                        localStorage.setItem(RECORDS_KEY, JSON.stringify(empty));
+                        return empty;
+                    }
+                    var data = JSON.parse(raw);
+                    if (Array.isArray(data)) {
+                        var migrated = defaultWorkbookFromLegacyArray(data);
+                        localStorage.setItem(RECORDS_KEY, JSON.stringify(migrated));
+                        return migrated;
+                    }
+                    return normalizeWorkbookShape(data);
+                } catch (e) {
+                    var fallback = defaultWorkbookFromLegacyArray([]);
+                    try { localStorage.setItem(RECORDS_KEY, JSON.stringify(fallback)); } catch (e2) {}
+                    return fallback;
+                }
+            }
+
+            function writeWorkbook(wb) {
+                localStorage.setItem(RECORDS_KEY, JSON.stringify(normalizeWorkbookShape(wb || {})));
+            }
+
+            function migrateNormalizeAllNumbersOnce() {
+                var wb = readWorkbook();
+                if (!wb || wb._normV2) return;
+                var defs = readCustomFields();
+                var typeById = {};
+                for (var i = 0; i < defs.length; i++) {
+                    var d = defs[i] || {};
+                    if (!d.id) continue;
+                    typeById[String(d.id)] = String(d.type || 'text');
+                }
+                var changed = false;
+                for (var si = 0; si < (wb.sheets ? wb.sheets.length : 0); si++) {
+                    var sid = String(wb.sheets[si] && wb.sheets[si].id || '');
+                    var list = (wb.recordsBySheet && wb.recordsBySheet[sid]) ? wb.recordsBySheet[sid] : [];
+                    for (var ri = 0; ri < list.length; ri++) {
+                        var rec = list[ri] || {};
+                        function normAssign(k) {
+                            if (rec[k] != null && String(rec[k]).trim() !== '') {
+                                var nv = normalizeNumber(rec[k]);
+                                if (nv !== String(rec[k])) { rec[k] = nv; changed = true; }
+                            }
+                        }
+                        normAssign('acqcst');
+                        normAssign('accdep');
+                        normAssign('bvalue');
+                        var cust = (rec.custom && typeof rec.custom === 'object') ? rec.custom : null;
+                        if (cust) {
+                            for (var fid in cust) {
+                                if (!Object.prototype.hasOwnProperty.call(cust, fid)) continue;
+                                var t = typeById[String(fid)];
+                                if (t === 'number' || t === 'decimal') {
+                                    var cur = cust[fid];
+                                    if (cur != null && String(cur).trim() !== '') {
+                                        var nn = normalizeNumber(cur);
+                                        if (nn !== String(cur)) { cust[fid] = nn; changed = true; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                wb._normV2 = 1;
+                if (changed) writeWorkbook(wb); else localStorage.setItem(RECORDS_KEY, JSON.stringify(wb));
+            }
+
+            function sheetById(wb, sheetId) {
+                for (var i = 0; i < (wb && wb.sheets ? wb.sheets.length : 0); i++) {
+                    if (String(wb.sheets[i] && wb.sheets[i].id || '') === String(sheetId)) return wb.sheets[i];
+                }
+                return null;
+            }
+
+            function activeSheet() {
+                var wb = readWorkbook();
+                return sheetById(wb, wb.activeSheetId) || (wb.sheets && wb.sheets.length ? wb.sheets[0] : null);
+            }
+
+            function touchSheetUpdatedAt(wb, sheetId) {
+                var s = sheetById(wb, sheetId);
+                if (s) s.updatedAt = new Date().toISOString();
+            }
+
+            function setActiveSheetId(sheetId, opts) {
+                var wb = readWorkbook();
+                var sid = String(sheetId || '');
+                if (!sid) return;
+                if (!sheetById(wb, sid)) return;
+                wb.activeSheetId = sid;
+                writeWorkbook(wb);
+
+                if (opts && opts.pushUrl) {
+                    try {
+                        var url = new URL(window.location.href);
+                        url.searchParams.set('sheet', sid);
+                        window.history.replaceState({}, '', url.toString());
+                    } catch (e) {
+                    }
+                }
+            }
+
+            function getUrlSheetParam() {
+                try {
+                    var params = new URLSearchParams(window.location.search);
+                    return params.get('sheet');
+                } catch (e) {
+                    return null;
+                }
+            }
+
+            function refreshAddRecordLink() {
+                if (!addRecordLink) return;
+                var wb = readWorkbook();
+                var sid = String(wb.activeSheetId || '');
+                addRecordLink.href = 'add-record.html?sheet=' + encodeURIComponent(sid);
+            }
+
+            function renderSheetTabs() {
+                if (!sheetTabs) return;
+                var wb = readWorkbook();
+                sheetTabs.innerHTML = '';
+                for (var i = 0; i < wb.sheets.length; i++) {
+                    var s = wb.sheets[i] || {};
+                    var sid = String(s.id || '');
+                    if (!sid) continue;
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn btn-secondary btn-sm' + (String(wb.activeSheetId) === sid ? ' is-active' : '');
+                    btn.textContent = String(s.name || ('Sheet ' + String(i + 1)));
+                    btn.setAttribute('data-sheet-id', sid);
+                    sheetTabs.appendChild(btn);
+                }
+
+                if (importTargetSheet) {
+                    var selected = importTargetSheet.value || '';
+                    importTargetSheet.innerHTML = '';
+                    for (var i = 0; i < wb.sheets.length; i++) {
+                        var s2 = wb.sheets[i] || {};
+                        var opt = document.createElement('option');
+                        opt.value = String(s2.id || '');
+                        opt.textContent = String(s2.name || '');
+                        importTargetSheet.appendChild(opt);
+                    }
+                    if (selected && sheetById(wb, selected)) {
+                        importTargetSheet.value = selected;
+                    } else {
+                        importTargetSheet.value = String(wb.activeSheetId || '');
+                    }
+                }
+
+                refreshAddRecordLink();
+            }
+
+            function ensureInitialSheetFromUrl() {
+                var desired = getUrlSheetParam();
+                if (!desired) return;
+                var wb = readWorkbook();
+                if (sheetById(wb, desired) && String(wb.activeSheetId || '') !== String(desired)) {
+                    setActiveSheetId(desired, { pushUrl: false });
+                }
+            }
+
+            function readAudit() {
+                try {
+                    var raw = localStorage.getItem(AUDIT_KEY);
+                    if (!raw) return [];
+                    var data = JSON.parse(raw);
+                    var list = Array.isArray(data) ? data : [];
+                    var normalized = [];
+                    for (var i = 0; i < list.length; i++) {
+                        normalized.push(buildAuditEntry(list[i] || {}));
+                    }
+                    return normalized;
+                } catch (e) {
+                    return [];
+                }
+            }
+
+            function writeAudit(entries) {
+                localStorage.setItem(AUDIT_KEY, JSON.stringify(entries));
+            }
+
+            function appendAudit(entry) {
+                var entries = auditCache.length ? auditCache.slice() : readAudit();
+                var next = [buildAuditEntry(entry || {})];
+                for (var i = 0; i < entries.length; i++) next.push(entries[i]);
+                if (next.length > 2000) next.length = 2000;
+                auditCache = next;
+                writeAudit(next);
+                auditCurrentPage = 1;
+                applyAuditFilters();
+            }
+
+            function formatMoney(value) {
+                var s = value == null ? '' : String(value).trim();
+                if (!s) return '0.00';
+                if (s.replace(/\s/g, '') === '-') return '0.00';
+                s = s.replace(/,/g, '');
+                var num = Number(s);
+                if (!isFinite(num)) return '0.00';
+                return num.toFixed(2);
+            }
+
+            function toNumber(value) {
+                var s = (value == null ? '' : String(value)).trim();
+                if (!s) return 0;
+                if (s.replace(/\s/g, '') === '-') return 0;
+                s = s.replace(/,/g, '');
+                var n = Number(s);
+                return isFinite(n) ? n : 0;
+            }
+
+            function costBucket(record) {
+                var acqcstRaw = record && record.acqcst != null ? String(record.acqcst).trim() : '';
+                var accdepRaw = record && record.accdep != null ? String(record.accdep).trim() : '';
+                var maxValue = Math.max(toNumber(acqcstRaw), toNumber(accdepRaw));
+                if (maxValue >= 50000) return 'capex';
+                if (maxValue > 5000) return 'semi_high';
+                return 'semi_low';
+            }
+
+            function formatTotal(value) {
+                var n = Number(value);
+                if (!isFinite(n)) n = 0;
+                try {
+                    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                } catch (e) {
+                    return n.toFixed(2);
+                }
+            }
+
+            function updateTotals(records) {
+                var totalAcqcst = 0;
+                var totalAccdep = 0;
+                var totalBvalue = 0;
+
+                var count = (records || []).length;
+
+                for (var i = 0; i < records.length; i++) {
+                    totalAcqcst += toNumber(records[i].acqcst);
+                    totalAccdep += toNumber(records[i].accdep);
+                    totalBvalue += toNumber(records[i].bvalue);
+                }
+
+                if (totalAcqcstEl) totalAcqcstEl.textContent = formatTotal(totalAcqcst);
+                if (totalAccdepEl) totalAccdepEl.textContent = formatTotal(totalAccdep);
+                if (totalBvalueEl) totalBvalueEl.textContent = formatTotal(totalBvalue);
+                if (totalRecordCountEl) totalRecordCountEl.textContent = String(count);
+            }
+
+            function updateTotalsFromNumbers(totalAcqcst, totalAccdep, totalBvalue, count) {
+                if (totalAcqcstEl) totalAcqcstEl.textContent = formatTotal(totalAcqcst);
+                if (totalAccdepEl) totalAccdepEl.textContent = formatTotal(totalAccdep);
+                if (totalBvalueEl) totalBvalueEl.textContent = formatTotal(totalBvalue);
+                if (totalRecordCountEl) totalRecordCountEl.textContent = String(count || 0);
+            }
+
+            function isColumnTokenVisible(token) {
+                if (!table || !table.tHead || !table.tHead.rows || !table.tHead.rows.length) return false;
+                var rowsHead = table.tHead.rows;
+                var headerCells = rowsHead[rowsHead.length - 1].cells;
+                for (var i = 0; i < headerCells.length; i++) {
+                    var th = headerCells[i];
+                    var k = th.getAttribute('data-standard-key');
+                    var sys = th.getAttribute('data-system-col');
+                    var cid = th.getAttribute('data-custom-field-id');
+                    var tok = k || sys || (cid ? ('custom:' + String(cid)) : '');
+                    if (String(tok || '') !== String(token || '')) continue;
+                    if (th.style.display === 'none') return false;
+                    return true;
+                }
+                return false;
+            }
+
+            function updateTotalsKpiVisibility() {
+                function setBox(el, show) {
+                    if (!el) return;
+                    var box = el.parentElement;
+                    if (!box) return;
+                    box.style.display = show ? '' : 'none';
+                }
+                var showA = isColumnTokenVisible('acqcst');
+                var showD = isColumnTokenVisible('accdep');
+                var showB = isColumnTokenVisible('bvalue');
+                setBox(totalAcqcstEl, showA);
+                setBox(totalAccdepEl, showD);
+                setBox(totalBvalueEl, showB);
+            }
+
+            function headerIndexForToken(token) {
+                if (!table || !table.tHead || !table.tHead.rows || !table.tHead.rows.length) return -1;
+                var headerCells = table.tHead.rows[0].cells;
+                for (var i = 0; i < headerCells.length; i++) {
+                    var th = headerCells[i];
+                    var k = th.getAttribute('data-standard-key');
+                    var sys = th.getAttribute('data-system-col');
+                    var cid = th.getAttribute('data-custom-field-id');
+                    var tok = k || sys || (cid ? ('custom:' + String(cid)) : '');
+                    if (String(tok || '') === String(token || '')) return i;
+                }
+                return -1;
+            }
+
+            function sumVisibleColumnByToken(token) {
+                var idx = headerIndexForToken(token);
+                if (idx < 0) return 0;
+                var body = table && table.tBodies && table.tBodies[0] ? table.tBodies[0] : null;
+                if (!body) return 0;
+                var total = 0;
+                var isStdMoney = (token === 'acqcst' || token === 'accdep' || token === 'bvalue');
+                for (var i = 0; i < body.rows.length; i++) {
+                    var tr = body.rows[i];
+                    if (tr.style.display === 'none') continue;
+                    var v = 0;
+                    if (isStdMoney) {
+                        if (token === 'acqcst') v = toNumber(tr.dataset.acqcst || '');
+                        else if (token === 'accdep') v = toNumber(tr.dataset.accdep || '');
+                        else if (token === 'bvalue') v = toNumber(tr.dataset.bvalue || '');
+                    } else {
+                        var cell = tr.cells[idx];
+                        var txt = cell ? (cell.innerText || cell.textContent || '') : '';
+                        v = toNumber(txt);
+                    }
+                    total += v;
+                }
+                return total;
+            }
+
+            function sumFilteredColumnByToken(token) {
+                var idx = headerIndexForToken(token);
+                if (idx < 0) return 0;
+                var body = table && table.tBodies && table.tBodies[0] ? table.tBodies[0] : null;
+                if (!body) return 0;
+                var parsed = parseStatusSearch(search.value);
+                var tokens = parsed.tokens;
+                var statusFilter = parsed.status;
+                var dept = normalize(deptFilter.value);
+                var cost = (costFilter && costFilter.value) ? String(costFilter.value) : '';
+                var total = 0;
+                var isStdMoney = (token === 'acqcst' || token === 'accdep' || token === 'bvalue');
+                for (var i = 0; i < body.rows.length; i++) {
+                    var row = body.rows[i];
+                    var rowText = row.dataset.search || '';
+                    var matchesText = true;
+                    if (tokens.length) {
+                        for (var t = 0; t < tokens.length; t++) {
+                            if (!tokens[t]) continue;
+                            if (rowText.indexOf(tokens[t]) === -1) { matchesText = false; break; }
+                        }
+                    }
+                    var matchesStatus = !statusFilter || String(row.dataset.status || '') === statusFilter;
+                    var matchesDept = !dept || normalize(row.dataset.deptbranch || '') === dept;
+                    var matchesCost = !cost || String(row.dataset.costbucket || '') === cost;
+                    if (!(matchesText && matchesStatus && matchesDept && matchesCost)) continue;
+                    var v = 0;
+                    if (isStdMoney) {
+                        if (token === 'acqcst') v = toNumber(row.dataset.acqcst || '');
+                        else if (token === 'accdep') v = toNumber(row.dataset.accdep || '');
+                        else if (token === 'bvalue') v = toNumber(row.dataset.bvalue || '');
+                    } else {
+                        var cell = row.cells[idx];
+                        var txt = cell ? (cell.innerText || cell.textContent || '') : '';
+                        v = toNumber(txt);
+                    }
+                    total += v;
+                }
+                return total;
+            }
+
+            function totalsSnapshot(records) {
+                var a = 0;
+                var d = 0;
+                var b = 0;
+                for (var i = 0; i < (records || []).length; i++) {
+                    a += toNumber(records[i] && records[i].acqcst);
+                    d += toNumber(records[i] && records[i].accdep);
+                    b += toNumber(records[i] && records[i].bvalue);
+                }
+                return 'ACQCST ' + formatTotal(a) + ' | ACCDEP ' + formatTotal(d) + ' | BVALUE ' + formatTotal(b) + ' | Count ' + String((records || []).length);
+            }
+
+            var importState = {
+                headers: [],
+                rows: [],
+                mapping: {},
+                validRecords: [],
+                failures: [],
+                blocked: false,
+                blockedReasons: [],
+                reportCsv: '',
+                sourceFileName: '',
+                unmappedLabels: [],
+                unmappedRequiredCustomLabels: []
+            };
+
+            var IMPORT_FIELDS = [
+                { key: 'deptcd', label: 'DEPTCD' },
+                { key: 'deptbranch', label: 'DEPT/BRANCH' },
+                { key: 'tmnum', label: 'TMNUM' },
+                { key: 'description', label: 'DESCRIPTION' },
+                { key: 'sernum', label: 'SERNUM' },
+                { key: 'oldppronum', label: 'OLD PPRONUM' },
+                { key: 'pronum', label: 'PRONUM' },
+                { key: 'acqdte', label: 'ACQDTE' },
+                { key: 'acqcst', label: 'ACQCST' },
+                { key: 'accdep', label: 'ACCDEP' },
+                { key: 'bvalue', label: 'BVALUE' },
+                { key: 'usercd', label: 'USERCD' },
+                { key: 'lastname', label: 'LAST NAME' },
+                { key: 'firstname', label: 'FIRST NAME' },
+                { key: 'middlename', label: 'MIDDLE NAME' }
+            ];
+
+            function sanitizeRecord(rec) {
+                var out = {};
+                if (rec && rec.id != null && String(rec.id) !== '') {
+                    out.id = rec.id;
+                } else {
+                    out.id = Date.now() + '-' + Math.random().toString(16).slice(2);
+                }
+
+                for (var i = 0; i < IMPORT_FIELDS.length; i++) {
+                    var k = IMPORT_FIELDS[i].key;
+                    if (!rec) continue;
+                    if (rec[k] == null) continue;
+                    out[k] = rec[k];
+                }
+
+                var defs = customFieldsForUse();
+                var srcCustom = (rec && rec.custom && typeof rec.custom === 'object') ? rec.custom : {};
+                var nextCustom = {};
+                for (var ci = 0; ci < defs.length; ci++) {
+                    var fid = String(defs[ci] && defs[ci].id ? defs[ci].id : '');
+                    if (!fid) continue;
+                    if (srcCustom && srcCustom[fid] != null) nextCustom[fid] = srcCustom[fid];
+                }
+                out.custom = nextCustom;
+                return out;
+            }
+
+            function sanitizeRecords(list) {
+                var out = [];
+                for (var i = 0; i < (list || []).length; i++) {
+                    out.push(sanitizeRecord(list[i] || {}));
+                }
+                return out;
+            }
+
+            function labelForImportKey(key) {
+                if (String(key || '').indexOf('custom:') === 0) {
+                    var fid = String(key || '').slice('custom:'.length);
+                    var sid = '';
+                    try {
+                        sid = typeof getImportTargetSheetId === 'function' ? String(getImportTargetSheetId() || '') : '';
+                    } catch (e) {
+                        sid = '';
+                    }
+                    var defs = customFieldsForUse(sid);
+                    for (var ci = 0; ci < defs.length; ci++) {
+                        if (String(defs[ci] && defs[ci].id || '') === fid) return String(defs[ci].name || fid);
+                    }
+                    return fid;
+                }
+                for (var i = 0; i < IMPORT_FIELDS.length; i++) {
+                    if (IMPORT_FIELDS[i].key === key) return IMPORT_FIELDS[i].label;
+                }
+                return key;
+            }
+
+            function customImportFields() {
+                var sheetId = '';
+                try {
+                    if (typeof getImportTargetSheetId === 'function') sheetId = String(getImportTargetSheetId() || '');
+                } catch (e) {
+                    sheetId = '';
+                }
+                var defs = customFieldsForUse(sheetId);
+                var out = [];
+                for (var i = 0; i < defs.length; i++) {
+                    var d = defs[i] || {};
+                    var name = String(d.name || '').trim();
+                    if (!name) continue;
+                    out.push({
+                        label: name,
+                        key: 'custom:' + String(d.id || ''),
+                        id: String(d.id || ''),
+                        type: String(d.type || 'text'),
+                        required: !!d.required
+                    });
+                }
+                return out;
+            }
+
+            function cellToTextForImportTarget(cell, targetType) {
+                if (cell == null) return '';
+                if (cell instanceof Date) {
+                    var y = cell.getFullYear();
+                    var m = String(cell.getMonth() + 1).padStart(2, '0');
+                    var d = String(cell.getDate()).padStart(2, '0');
+                    return String(y) + '-' + m + '-' + d;
+                }
+                if (typeof cell === 'number') {
+                    if (targetType === 'date') return excelSerialToIso(cell);
+                    return String(cell);
+                }
+                return String(cell);
+            }
+
+            function defaultMapping(headers) {
+                var normalizedToIndex = {};
+                var headerNorms = [];
+                for (var i = 0; i < headers.length; i++) {
+                    var n = normalizeHeader(headers[i]);
+                    headerNorms[i] = n;
+                    if (!n) continue;
+                    if (normalizedToIndex[n] == null) normalizedToIndex[n] = i;
+                }
+
+                function pick(key, candidates) {
+                    for (var j = 0; j < candidates.length; j++) {
+                        var c = normalizeHeader(candidates[j]);
+                        if (normalizedToIndex[c] != null) return normalizedToIndex[c];
+                    }
+                    for (var j2 = 0; j2 < candidates.length; j2++) {
+                        var c2 = normalizeHeader(candidates[j2]);
+                        if (!c2) continue;
+                        for (var h = 0; h < headerNorms.length; h++) {
+                            if (!headerNorms[h]) continue;
+                            if (headerNorms[h].indexOf(c2) !== -1) return h;
+                        }
+                    }
+                    return '';
+                }
+
+                var map = {};
+                map.deptcd = pick('deptcd', ['deptcd', 'dept', 'departmentcode']);
+                map.deptbranch = pick('deptbranch', ['dept/branch', 'deptbranch', 'departmentbranch', 'branch']);
+                map.tmnum = pick('tmnum', ['tmnum', 'tm', 'transactionnumber', 'transactionno']);
+                map.description = pick('description', [
+                    'description', 'desc', 'itemdescription',
+                    'material description', 'material desc', 'mat description', 'material description - stock on hand',
+                    'article/item', 'article item', 'article', 'item',
+                    'item name', 'article name', 'particulars', 'asset description', 'asset/item', 'asset item'
+                ]);
+                map.sernum = pick('sernum', ['sernum', 'serialnumber', 'serial']);
+                map.oldppronum = pick('oldppronum', ['oldppronum', 'oldpprono', 'oldpronum', 'oldpo', 'old property number assigned', 'old property number', 'old property no']);
+                map.pronum = pick('pronum', ['pronum', 'pro', 'po', 'purchaseordernumber', 'purchaseorder', 'new property number assigned', 'new property number', 'new property no']);
+                map.acqdte = pick('acqdte', ['acqdte', 'acquisitiondate', 'dateacquired']);
+                map.acqcst = pick('acqcst', ['acqcst', 'acquisitioncost', 'cost', 'unit value', 'unitvalue', 'unit price', 'unitprice', 'price per unit', 'amount per unit', 'value per unit']);
+                map.accdep = pick('accdep', ['accdep', 'accountdeposit', 'deposit']);
+                map.bvalue = pick('bvalue', ['bvalue', 'bookvalue']);
+                map.usercd = pick('usercd', ['usercd', 'usercode']);
+                map.lastname = pick('lastname', ['lastname', 'last', 'surname']);
+                map.firstname = pick('firstname', ['firstname', 'first', 'givenname']);
+                map.middlename = pick('middlename', ['middlename', 'middle', 'mi']);
+
+                // Data-driven inference (trust the data, not the header)
+                var rows = (importState && Array.isArray(importState.rows)) ? importState.rows : [];
+                var sample = rows.slice(0, 150);
+                var colCount = headers.length;
+                var feats = [];
+                // Detect if this looks like a monthly sheet (many month columns)
+                var monthHeaderCount = 0;
+                (function(){
+                    var re = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i;
+                    for (var hh = 0; hh < headers.length; hh++) {
+                        var t = String(headers[hh] == null ? '' : headers[hh]).trim();
+                        if (re.test(t)) monthHeaderCount++;
+                    }
+                })();
+                var hasManyMonthHeaders = monthHeaderCount >= 3;
+                function parseCurrency(s) {
+                    if (s == null) return NaN;
+                    var t = String(s).trim();
+                    if (!t) return NaN;
+                    var hasMark = /₱|php/i.test(t);
+                    t = t.replace(/₱/g, '').replace(/,/g, '').replace(/php/ig, '').trim();
+                    var num = Number(t);
+                    if (!isFinite(num)) return NaN;
+                    if (hasMark) return num;
+                    // Accept as currency if decimal or large formatted numbers
+                    if (/[\.]/.test(String(t)) || Math.abs(num) >= 1000) return num;
+                    return NaN;
+                }
+                function isAllCapsWordy(s) {
+                    var t = String(s == null ? '' : s).trim();
+                    if (!t) return false;
+                    var letters = t.replace(/[^A-Za-z]/g, '');
+                    if (!letters) return false;
+                    var upper = letters.replace(/[^A-Z]/g, '');
+                    return upper.length / letters.length >= 0.6 && letters.length >= 4;
+                }
+                function isOldPproPattern(s) {
+                    return /\d+V\d+K\d+/i.test(String(s || ''));
+                }
+                function isPronumPattern(s) {
+                    return /^\d{2,4}(?:-\d{2,10}){3,}/.test(String(s || ''));
+                }
+                function toInt(s) {
+                    var m = String(s == null ? '' : s).trim().match(/^\d+$/);
+                    return m ? Number(m[0]) : NaN;
+                }
+                function approxEqual(a, b) {
+                    if (!isFinite(a) || !isFinite(b)) return false;
+                    var d = Math.abs(a - b);
+                    return d <= 0.01 || d <= Math.max(Math.abs(a), Math.abs(b)) * 0.001;
+                }
+
+                for (var c = 0; c < colCount; c++) {
+                    var f = { idx: c, currency: 0, caps: 0, oldpp: 0, pronum: 0, intSeq: 0, intValues: [], values: [], mean: 0 };
+                    var sum = 0; var sumCount = 0;
+                    for (var r = 0; r < sample.length; r++) {
+                        var v = sample[r] && sample[r][c];
+                        f.values.push(v);
+                        var n = parseCurrency(v);
+                        if (isFinite(n)) { f.currency++; sum += n; sumCount++; }
+                        if (isAllCapsWordy(v)) f.caps++;
+                        if (isOldPproPattern(v)) f.oldpp++;
+                        if (isPronumPattern(v)) f.pronum++;
+                        var iv = toInt(v);
+                        if (isFinite(iv)) f.intValues.push(iv);
+                    }
+                    f.mean = sumCount ? (sum / sumCount) : 0;
+                    // simple sequential check on first 10 ints
+                    var seqOk = 0;
+                    for (var sidx = 0; sidx < Math.min(10, f.intValues.length); sidx++) {
+                        if (f.intValues[sidx] === (sidx + 1)) seqOk++;
+                    }
+                    f.intSeq = seqOk;
+                    feats.push(f);
+                }
+
+                // Currency triple inference for ACQCST, ACCDEP, BVALUE
+                var usedCols = {};
+                var inferredMeta = [];
+                if (!hasManyMonthHeaders) {
+                    var currencyCols = feats.filter(function (f) { return f.currency >= 3; });
+                    var bestTriple = null; // {acqcst, accdep, bvalue, matches}
+                    for (var i0 = 0; i0 < currencyCols.length; i0++) {
+                        for (var j0 = 0; j0 < currencyCols.length; j0++) {
+                            if (i0 === j0) continue;
+                            for (var k0 = 0; k0 < currencyCols.length; k0++) {
+                                if (k0 === i0 || k0 === j0) continue;
+                                var ci = currencyCols[i0].idx, cj = currencyCols[j0].idx, ck = currencyCols[k0].idx;
+                                var matches = 0; var checks = 0;
+                                for (var r = 0; r < sample.length; r++) {
+                                    var a = parseCurrency(sample[r] && sample[r][ci]);
+                                    var d = parseCurrency(sample[r] && sample[r][cj]);
+                                    var b = parseCurrency(sample[r] && sample[r][ck]);
+                                    if (!isFinite(a) || !isFinite(d) || !isFinite(b)) continue;
+                                    checks++;
+                                    if (approxEqual(a - d, b)) matches++;
+                                }
+                                if (checks >= 3 && matches >= Math.max(2, Math.floor(checks * 0.4))) {
+                                    var triple = { acqcst: ci, accdep: cj, bvalue: ck, matches: matches, checks: checks };
+                                    if (!bestTriple || matches > bestTriple.matches) bestTriple = triple;
+                                }
+                            }
+                        }
+                    }
+
+                    if (bestTriple) {
+                        map.acqcst = bestTriple.acqcst;
+                        map.accdep = bestTriple.accdep;
+                        map.bvalue = bestTriple.bvalue;
+                        usedCols[bestTriple.acqcst] = true;
+                        usedCols[bestTriple.accdep] = true;
+                        usedCols[bestTriple.bvalue] = true;
+                        inferredMeta.push({ colIndex: bestTriple.acqcst, inferredKey: 'acqcst', confidence: Math.round(100 * bestTriple.matches / Math.max(1, bestTriple.checks)), reason: 'currency difference A-D=B' });
+                        inferredMeta.push({ colIndex: bestTriple.accdep, inferredKey: 'accdep', confidence: Math.round(100 * bestTriple.matches / Math.max(1, bestTriple.checks)), reason: 'currency difference A-D=B' });
+                        inferredMeta.push({ colIndex: bestTriple.bvalue, inferredKey: 'bvalue', confidence: Math.round(100 * bestTriple.matches / Math.max(1, bestTriple.checks)), reason: 'currency difference A-D=B' });
+                    } else if (currencyCols.length) {
+                        // Fallback: pick top two currencies by mean as ACQCST/ACCDEP
+                        currencyCols.sort(function (a, b) { return b.mean - a.mean; });
+                        if (currencyCols[0]) { map.acqcst = currencyCols[0].idx; usedCols[currencyCols[0].idx] = true; inferredMeta.push({ colIndex: currencyCols[0].idx, inferredKey: 'acqcst', confidence: 60, reason: 'currency column highest mean' }); }
+                        if (currencyCols[1]) { map.accdep = currencyCols[1].idx; usedCols[currencyCols[1].idx] = true; inferredMeta.push({ colIndex: currencyCols[1].idx, inferredKey: 'accdep', confidence: 50, reason: 'currency column second highest mean' }); }
+                    }
+                }
+
+                // Old property number
+                var bestOld = feats.slice().sort(function (a, b) { return b.oldpp - a.oldpp; })[0];
+                if (bestOld && bestOld.oldpp >= 2 && !usedCols[bestOld.idx]) {
+                    map.oldppronum = bestOld.idx;
+                    usedCols[bestOld.idx] = true;
+                    inferredMeta.push({ colIndex: bestOld.idx, inferredKey: 'oldppronum', confidence: Math.min(90, bestOld.oldpp * 20), reason: 'matches V...K... pattern' });
+                }
+
+                // PRONUM
+                var bestPro = feats.slice().sort(function (a, b) { return b.pronum - a.pronum; })[0];
+                if (bestPro && bestPro.pronum >= 2 && !usedCols[bestPro.idx]) {
+                    map.pronum = bestPro.idx;
+                    usedCols[bestPro.idx] = true;
+                    inferredMeta.push({ colIndex: bestPro.idx, inferredKey: 'pronum', confidence: Math.min(90, bestPro.pronum * 20), reason: 'long numeric-hyphen code' });
+                }
+
+                // DESCRIPTION
+                var bestDesc = feats.slice().sort(function (a, b) { return b.caps - a.caps; })[0];
+                if (bestDesc && bestDesc.caps >= 2 && !usedCols[bestDesc.idx]) {
+                    map.description = bestDesc.idx;
+                    usedCols[bestDesc.idx] = true;
+                    inferredMeta.push({ colIndex: bestDesc.idx, inferredKey: 'description', confidence: Math.min(85, bestDesc.caps * 15), reason: 'uppercase asset names' });
+                }
+
+                // Ignore quantity/location/condition columns explicitly (tracking only)
+                var ignoredCols = [];
+                for (var fc = 0; fc < feats.length; fc++) {
+                    var f0 = feats[fc];
+                    var qtyHits = 0;
+                    for (var r2 = 0; r2 < Math.min(10, f0.values.length); r2++) {
+                        var v2 = f0.values[r2];
+                        var iv2 = toInt(v2);
+                        if (isFinite(iv2) && iv2 >= 1 && iv2 <= 5) qtyHits++;
+                    }
+                    var txt = (headers[fc] == null ? '' : String(headers[fc])).toUpperCase();
+                    var looksLocation = /FLR|FLOOR|ROOM|BACKROOM|BLDG|BUILDING|SITE|LOCATION/i.test(txt) || /FLR|ROOM|BACKROOM/i.test(String(f0.values[0] || ''));
+                    var looksCondition = /GOOD|DEFECTIVE|ACTIVE|OK|INACTIVE|SERVICEABLE|UNSERVICEABLE/i.test(txt);
+                    if (qtyHits >= 3 || looksLocation || looksCondition) ignoredCols.push(fc);
+                }
+
+                // Persist inference info for audit
+                try {
+                    importState.inferredMeta = inferredMeta;
+                    importState.ignoredCols = ignoredCols;
+                } catch (e) {}
+
+                var customDefs = customImportFields();
+                for (var cf = 0; cf < customDefs.length; cf++) {
+                    var c = customDefs[cf] || {};
+                    var key = String(c.key || '');
+                    if (!key) continue;
+                    var name = String(c.label || '').trim();
+                    var nc = normalizeHeader(name);
+                    if (nc && normalizedToIndex[nc] != null) {
+                        map[key] = normalizedToIndex[nc];
+                    } else {
+                        map[key] = '';
+                    }
+                }
+                return map;
+            }
+
+            function renderImportMapping(headers) {
+                if (!importMapping) return;
+
+                importMapping.innerHTML = '';
+
+                function renderSectionTitle(text) {
+                    var title = document.createElement('div');
+                    title.className = 'field field-span-2';
+                    var strong = document.createElement('div');
+                    strong.style.fontWeight = '900';
+                    strong.textContent = text;
+                    title.appendChild(strong);
+                    importMapping.appendChild(title);
+                }
+
+                function renderMappingField(labelText, fieldKey, required) {
+                    var wrap = document.createElement('div');
+                    wrap.className = 'field';
+
+                    var label = document.createElement('label');
+                    label.textContent = labelText + (required ? ' (Required)' : '');
+                    label.setAttribute('for', 'map_' + fieldKey);
+                    wrap.appendChild(label);
+
+                    var sel = document.createElement('select');
+                    sel.className = 'input input-select';
+                    sel.id = 'map_' + fieldKey;
+                    sel.setAttribute('data-field', fieldKey);
+
+                    var optNone = document.createElement('option');
+                    optNone.value = '';
+                    optNone.textContent = 'Not Mapped';
+                    sel.appendChild(optNone);
+
+                    for (var c = 0; c < headers.length; c++) {
+                        var opt = document.createElement('option');
+                        opt.value = String(c);
+                        opt.textContent = String(headers[c]);
+                        sel.appendChild(opt);
+                    }
+
+                    sel.value = importState.mapping[fieldKey] === '' ? '' : String(importState.mapping[fieldKey]);
+                    wrap.appendChild(sel);
+
+                    var status = document.createElement('div');
+                    status.className = 'muted';
+                    status.setAttribute('data-map-status-for', fieldKey);
+                    status.textContent = sel.value === '' ? 'Not Mapped' : 'Mapped';
+                    wrap.appendChild(status);
+
+                    importMapping.appendChild(wrap);
+                }
+
+                renderSectionTitle('Standard Fields');
+                for (var i = 0; i < IMPORT_FIELDS.length; i++) {
+                    var f = IMPORT_FIELDS[i];
+                    renderMappingField(f.label, f.key, false);
+                }
+
+                var customDefs = customImportFields();
+                if (customDefs.length) {
+                    renderSectionTitle('Custom Fields');
+                    for (var cf = 0; cf < customDefs.length; cf++) {
+                        var c = customDefs[cf] || {};
+                        renderMappingField(c.label, c.key, !!c.required);
+                    }
+                }
+            }
+
+            function readMappingFromUi() {
+                var map = {};
+                var selects = importMapping ? importMapping.querySelectorAll('select[data-field]') : [];
+                for (var i = 0; i < selects.length; i++) {
+                    var key = selects[i].getAttribute('data-field');
+                    var v = selects[i].value;
+                    map[key] = v === '' ? '' : Number(v);
+                }
+                importState.mapping = map;
+
+                var statuses = importMapping ? importMapping.querySelectorAll('[data-map-status-for]') : [];
+                for (var s = 0; s < statuses.length; s++) {
+                    var k = statuses[s].getAttribute('data-map-status-for');
+                    var idx = importState.mapping ? importState.mapping[k] : '';
+                    statuses[s].textContent = (idx === '' || idx == null) ? 'Not Mapped' : 'Mapped';
+                }
+            }
+
+            function ensureCustomFieldsForMapping() {
+                if (!importState || !Array.isArray(importState.headers) || !importState.headers.length) return;
+                var headers = importState.headers.slice();
+                var sid = '';
+                try { if (typeof getImportTargetSheetId === 'function') sid = String(getImportTargetSheetId() || ''); } catch (e) { sid = ''; }
+
+                function isPlaceholderLabel(text) {
+                    var t = String(text == null ? '' : text).trim();
+                    return /^column\s+\d+$/i.test(t);
+                }
+
+                var defs = readCustomFields();
+                function parseMonthSub(name) {
+                    var t = String(name == null ? '' : name).trim();
+                    if (!t) return null;
+                    var parts = t.split(' - ');
+                    if (parts.length >= 2 && /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i.test(parts[0])) {
+                        return { month: parts[0], sub: parts.slice(1).join(' - ') };
+                    }
+                    return null;
+                }
+                function findCustomByNameKeyOrName(name, sheetId) {
+                    var key = normalizeCustomFieldName(name);
+                    for (var i = 0; i < defs.length; i++) {
+                        var d = defs[i] || {};
+                        var dSid = d.sheetId == null ? '' : String(d.sheetId);
+                        if (dSid && sheetId && dSid !== sheetId) continue;
+                        if (String(d.nameKey || '') === key) return d;
+                        if (!d.nameKey && normalizeCustomFieldName(String(d.name || '')) === key) return d;
+                    }
+                    return null;
+                }
+
+                var usedIdx = {};
+                var map = importState.mapping || {};
+                for (var k in map) { if (map[k] !== '' && map[k] != null) usedIdx[Number(map[k])] = true; }
+
+                var changed = false;
+                for (var i2 = 0; i2 < headers.length; i2++) {
+                    if (usedIdx[i2]) continue;
+                    var label = String(headers[i2] == null ? '' : headers[i2]).trim();
+                    if (!label || isPlaceholderLabel(label)) continue;
+                    var existing = findCustomByNameKeyOrName(label, sid);
+                    if (!existing) {
+                        var isMonth = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i.test(label);
+                        var p = parseMonthSub(label);
+                        var def = {
+                            id: newId('cf'),
+                            name: label,
+                            nameKey: normalizeCustomFieldName(label),
+                            type: isMonth ? 'decimal' : 'text',
+                            required: false,
+                            sheetId: sid,
+                            orderBySheet: {},
+                            createdAt: new Date().toISOString(),
+                            updatedAt: new Date().toISOString(),
+                            groupMonth: p ? p.month : '',
+                            groupChild: p ? p.sub : ''
+                        };
+                        def.orderBySheet[sid] = i2;
+                        defs.push(def);
+                        importState.mapping['custom:' + def.id] = i2;
+                        changed = true;
+                    } else {
+                        if (!existing.orderBySheet || typeof existing.orderBySheet !== 'object') existing.orderBySheet = {};
+                        if (existing.orderBySheet[sid] !== i2) { existing.orderBySheet[sid] = i2; changed = true; }
+                        var monthLike = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i.test(label);
+                        if (monthLike && String(existing.type || 'text') !== 'decimal') { existing.type = 'decimal'; changed = true; }
+                        var p2 = parseMonthSub(label);
+                        if (p2) {
+                            if (existing.groupMonth !== p2.month) { existing.groupMonth = p2.month; changed = true; }
+                            if (existing.groupChild !== p2.sub) { existing.groupChild = p2.sub; changed = true; }
+                        }
+                        importState.mapping['custom:' + existing.id] = i2;
+                    }
+                }
+
+                if (changed) writeCustomFields(defs);
+            }
+
+            function refreshImportMappingForTargetSheet() {
+                if (!importState || !importState.headers || !importState.headers.length) return;
+
+                var prev = {};
+                try {
+                    readMappingFromUi();
+                    prev = importState.mapping || {};
+                } catch (e) {
+                    prev = importState.mapping || {};
+                }
+
+                var next = defaultMapping(importState.headers);
+                for (var k in prev) {
+                    if (!Object.prototype.hasOwnProperty.call(prev, k)) continue;
+                    if (!Object.prototype.hasOwnProperty.call(next, k)) continue;
+                    next[k] = prev[k];
+                }
+                importState.mapping = next;
+                renderImportMapping(importState.headers);
+                readMappingFromUi();
+
+                var stats = validateImport();
+                var hint = 'Loaded rows: ' + String(stats.total) + ' | Ready to import: ' + String(stats.imported) + ' | Warnings: ' + String(stats.warnings);
+                if (importState.unmappedLabels && importState.unmappedLabels.length) {
+                    hint += ' | Some fields were not mapped and will be skipped during import.';
+                }
+                if (importState.unmappedRequiredCustomLabels && importState.unmappedRequiredCustomLabels.length) {
+                    hint += ' | Required custom fields not mapped: ' + importState.unmappedRequiredCustomLabels.join(' / ');
+                }
+                setImportHint(hint);
+                renderImportPreview(stats);
+            }
+
+            function mappedCell(rowArray, key) {
+                var idx = importState.mapping[key];
+                if (idx === '' || idx == null) return '';
+                if (!rowArray || !rowArray.length) return '';
+                return rowArray[idx];
+            }
+
+            function validateImport() {
+                importState.validRecords = [];
+                importState.failures = [];
+                importState.reportCsv = '';
+                importState.blocked = false;
+                importState.blockedReasons = [];
+                importState.unmappedLabels = [];
+                importState.unmappedRequiredCustomLabels = [];
+
+                function isMapped(key) {
+                    var idx = importState.mapping ? importState.mapping[key] : '';
+                    return !(idx === '' || idx == null);
+                }
+
+                var customDefs = customImportFields();
+                var globalWarnings = [];
+                var requiredUnmappedCustomIds = [];
+                for (var ci = 0; ci < customDefs.length; ci++) {
+                    var cd = customDefs[ci] || {};
+                    if (cd.required && !isMapped(cd.key)) {
+                        importState.unmappedRequiredCustomLabels.push(String(cd.label || ''));
+                        globalWarnings.push('Required custom field not mapped (skipped): ' + String(cd.label || ''));
+                        if (cd.id) requiredUnmappedCustomIds.push(String(cd.id));
+                    }
+                }
+
+                for (var fi0 = 0; fi0 < IMPORT_FIELDS.length; fi0++) {
+                    var kfi0 = IMPORT_FIELDS[fi0].key;
+                    if (!isMapped(kfi0)) importState.unmappedLabels.push(labelForImportKey(kfi0));
+                }
+                for (var cfi0 = 0; cfi0 < customDefs.length; cfi0++) {
+                    var kcfi0 = customDefs[cfi0] && customDefs[cfi0].key ? customDefs[cfi0].key : '';
+                    if (!kcfi0) continue;
+                    if (!isMapped(kcfi0)) importState.unmappedLabels.push(labelForImportKey(kcfi0));
+                }
+
+                var existing = currentRecords(getImportTargetSheetId());
+                var existingSernum = {};
+                for (var i = 0; i < existing.length; i++) {
+                    existingSernum[normalize(existing[i].sernum)] = true;
+                }
+
+                var batchSernum = {};
+
+                for (var r = 0; r < importState.rows.length; r++) {
+                    var row = importState.rows[r];
+                    var warnings = [];
+
+                    var rec = {
+                        id: Date.now() + '-' + Math.random().toString(16).slice(2),
+                        custom: {}
+                    };
+
+                    for (var um = 0; um < requiredUnmappedCustomIds.length; um++) {
+                        rec.custom[requiredUnmappedCustomIds[um]] = null;
+                    }
+
+                    for (var fi = 0; fi < IMPORT_FIELDS.length; fi++) {
+                        var key0 = IMPORT_FIELDS[fi].key;
+                        if (!isMapped(key0)) continue;
+                        rec[key0] = String(cellToText(mappedCell(row, key0), key0) || '').trim();
+                    }
+
+                    for (var cfi = 0; cfi < customDefs.length; cfi++) {
+                        var cf = customDefs[cfi] || {};
+                        if (!isMapped(cf.key)) continue;
+                        var raw = mappedCell(row, cf.key);
+                        var text = String(cellToTextForImportTarget(raw, cf.type) || '').trim();
+
+                        if (cf.required && !text) {
+                            warnings.push('Missing ' + String(cf.label || 'custom field'));
+                        }
+
+                        if (text) {
+                            if (cf.type === 'date') {
+                                var d = normalizeDate(text);
+                                if (!d) {
+                                    warnings.push('Invalid ' + String(cf.label || 'custom field'));
+                                }
+                                rec.custom[cf.id] = d;
+                            } else if (cf.type === 'number') {
+                                var n0 = normalizeNumber(text);
+                                var n1 = n0 ? Number(n0) : NaN;
+                                if (!n0 || !isFinite(n1) || Math.floor(n1) !== n1) {
+                                    warnings.push('Invalid ' + String(cf.label || 'custom field'));
+                                }
+                                rec.custom[cf.id] = n0;
+                            } else if (cf.type === 'decimal') {
+                                var dn = normalizeNumber(text);
+                                if (text && !dn) {
+                                    warnings.push('Invalid ' + String(cf.label || 'custom field'));
+                                }
+                                rec.custom[cf.id] = dn;
+                            } else {
+                                rec.custom[cf.id] = text;
+                            }
+                        }
+                    }
+
+                    if (isMapped('pronum') && !rec.pronum) warnings.push('Missing PRONUM');
+                    if (isMapped('sernum') && !rec.sernum) warnings.push('Missing SERNUM');
+                    if (isMapped('usercd') && !rec.usercd) warnings.push('Missing USERCD');
+                    if (isMapped('acqdte') && !rec.acqdte) warnings.push('Missing ACQDTE');
+
+                    if (isMapped('acqdte')) {
+                        var acqdteNorm = normalizeDate(rec.acqdte);
+                        if (rec.acqdte && !acqdteNorm) warnings.push('Invalid ACQDTE');
+                        rec.acqdte = acqdteNorm;
+                    }
+
+                    if (isMapped('acqcst')) {
+                        var acqcstNorm = normalizeNumber(rec.acqcst);
+                        if (rec.acqcst && !acqcstNorm) warnings.push('Invalid ACQCST');
+                        rec.acqcst = acqcstNorm;
+                    }
+
+                    if (isMapped('accdep')) {
+                        var accdepNorm = normalizeNumber(rec.accdep);
+                        if (rec.accdep && !accdepNorm) warnings.push('Invalid ACCDEP');
+                        rec.accdep = accdepNorm;
+                    }
+
+                    if ((isMapped('acqcst') || isMapped('accdep')) && !rec.acqcst && !rec.accdep) warnings.push('Missing ACQCST and ACCDEP');
+
+                    if (isMapped('bvalue')) {
+                        var bvalueNorm = normalizeNumber(rec.bvalue);
+                        if (rec.bvalue && !bvalueNorm) warnings.push('Invalid BVALUE');
+                        rec.bvalue = bvalueNorm;
+                    }
+
+                    // Skip category/section rows: if all mapped standard fields (except DESCRIPTION) and all mapped custom fields are empty
+                    var hasAnyMappedStd = false;
+                    for (var si = 0; si < IMPORT_FIELDS.length; si++) {
+                        var kk = IMPORT_FIELDS[si].key;
+                        if (kk === 'description') continue;
+                        if (!isMapped(kk)) continue;
+                        var val = rec[kk];
+                        if (val != null && String(val).trim() !== '') { hasAnyMappedStd = true; break; }
+                    }
+                    var hasAnyMappedCustom = false;
+                    for (var ci2 = 0; ci2 < customDefs.length; ci2++) {
+                        var cdef = customDefs[ci2] || {};
+                        if (!isMapped(cdef.key)) continue;
+                        var cvv = rec.custom[cdef.id];
+                        if (cvv != null && String(cvv).trim() !== '') { hasAnyMappedCustom = true; break; }
+                    }
+                    if (!hasAnyMappedStd && !hasAnyMappedCustom) {
+                        continue; // ignore non-data category/group rows
+                    }
+
+                    var nSernum = isMapped('sernum') ? normalize(rec.sernum) : '';
+                    var nPronum = isMapped('pronum') ? normalize(rec.pronum) : '';
+                    var nUsercd = isMapped('usercd') ? normalize(rec.usercd) : '';
+
+                    if (nSernum) {
+                        if (existingSernum[nSernum]) warnings.push('Duplicate SERNUM (already exists)');
+                        if (batchSernum[nSernum]) warnings.push('Duplicate SERNUM (within file)');
+                        batchSernum[nSernum] = true;
+                    }
+
+                    importState.validRecords.push(rec);
+                    if (warnings.length) {
+                        importState.failures.push({
+                            rowNumber: r + 2,
+                            warnings: warnings,
+                            record: rec
+                        });
+                    }
+                }
+
+                if (globalWarnings.length) {
+                    importState.failures.unshift({
+                        rowNumber: 'GLOBAL',
+                        warnings: globalWarnings,
+                        record: { custom: {} }
+                    });
+                }
+
+                var reportLines = [];
+                var reportHeaders = ['Row', 'Errors'];
+                for (var h = 0; h < IMPORT_FIELDS.length; h++) reportHeaders.push(IMPORT_FIELDS[h].label);
+                for (var ch = 0; ch < customDefs.length; ch++) reportHeaders.push(String(customDefs[ch].label || ''));
+                reportLines.push(reportHeaders.join(','));
+
+                for (var f = 0; f < importState.failures.length; f++) {
+                    var fail = importState.failures[f];
+                    var rowOut = [];
+                    rowOut.push(String(fail.rowNumber));
+                    rowOut.push(escapeDelimited((fail.warnings || []).join(' | '), ','));
+                    for (var k = 0; k < IMPORT_FIELDS.length; k++) {
+                        var key = IMPORT_FIELDS[k].key;
+                        rowOut.push(escapeDelimited(excelSafeText(fail.record[key] || ''), ','));
+                    }
+                    for (var ck = 0; ck < customDefs.length; ck++) {
+                        var cid = String(customDefs[ck] && customDefs[ck].id ? customDefs[ck].id : '');
+                        var cv = (fail.record && fail.record.custom && typeof fail.record.custom === 'object') ? fail.record.custom[cid] : '';
+                        rowOut.push(escapeDelimited(excelSafeText(cv || ''), ','));
+                    }
+                    reportLines.push(rowOut.join(','));
+                }
+                importState.reportCsv = '\ufeff' + reportLines.join('\r\n');
+
+                return {
+                    total: importState.rows.length,
+                    imported: importState.validRecords.length,
+                    warnings: importState.failures.length,
+                    blocked: false,
+                    unmapped: importState.unmappedLabels.length,
+                    unmappedRequiredCustom: importState.unmappedRequiredCustomLabels.length
+                };
+            }
+
+            function renderImportPreview(stats) {
+                if (!importPreviewHead || !importPreviewBody || !importPreviewWrap) return;
+                importPreviewHead.innerHTML = '';
+                importPreviewBody.innerHTML = '';
+
+                function isMapped(key) {
+                    var idx = importState.mapping ? importState.mapping[key] : '';
+                    return !(idx === '' || idx == null);
+                }
+
+                var colMeta = [];
+                var customDefs = customImportFields();
+                var allKeys = [];
+                for (var ak = 0; ak < IMPORT_FIELDS.length; ak++) allKeys.push(IMPORT_FIELDS[ak].key);
+                for (var ck = 0; ck < customDefs.length; ck++) allKeys.push(customDefs[ck].key);
+
+                function customTypeForKey(key) {
+                    if (String(key || '').indexOf('custom:') !== 0) return '';
+                    for (var i = 0; i < customDefs.length; i++) {
+                        if (String(customDefs[i] && customDefs[i].key || '') === String(key)) return String(customDefs[i].type || 'text');
+                    }
+                    return '';
+                }
+                for (var c0 = 0; c0 < (importState.headers || []).length; c0++) {
+                    var mappedKeys = [];
+                    for (var mk = 0; mk < allKeys.length; mk++) {
+                        var k0 = allKeys[mk];
+                        if (importState.mapping && importState.mapping[k0] === c0) mappedKeys.push(k0);
+                    }
+                    colMeta.push({
+                        idx: c0,
+                        header: String(importState.headers[c0] == null ? '' : importState.headers[c0]),
+                        mappedKeys: mappedKeys
+                    });
+                }
+
+                var anyMapped = false;
+                for (var am = 0; am < allKeys.length; am++) {
+                    if (isMapped(allKeys[am])) {
+                        anyMapped = true;
+                        break;
+                    }
+                }
+
+                var warnMap = {};
+                for (var w = 0; w < importState.failures.length; w++) {
+                    warnMap[String(importState.failures[w].rowNumber)] = importState.failures[w].warnings || [];
+                }
+
+                var headRow = document.createElement('tr');
+                var thStatus = document.createElement('th');
+                thStatus.textContent = 'STATUS';
+                headRow.appendChild(thStatus);
+
+                for (var i = 0; i < colMeta.length; i++) {
+                    var th = document.createElement('th');
+                    var suffix = '';
+                    if (!colMeta[i].mappedKeys.length) {
+                        suffix = ' (Not Mapped)';
+                    } else {
+                        suffix = ' (Mapped: ' + colMeta[i].mappedKeys.map(labelForImportKey).join(' / ') + ')';
+                    }
+                    th.textContent = (colMeta[i].header || ('Column ' + String(i + 1))) + suffix;
+                    headRow.appendChild(th);
+                }
+                var thead = document.createElement('thead');
+                thead.appendChild(headRow);
+                importPreviewHead.appendChild(headRow);
+
+                function td(text, cls) {
+                    var cell = document.createElement('td');
+                    if (cls) cell.className = cls;
+                    cell.textContent = text == null ? '' : String(text);
+                    return cell;
+                }
+
+                var previewCount = Math.min(8, importState.rows.length);
+                for (var r = 0; r < previewCount; r++) {
+                    var row = importState.rows[r];
+
+                    var rowNumber = r + 2;
+                    var warnings = warnMap[String(rowNumber)] || [];
+
+                    var tr = document.createElement('tr');
+                    tr.appendChild(td(warnings.length ? 'WARN' : 'OK', warnings.length ? 'badge warn' : 'badge ok'));
+
+                    for (var c = 0; c < colMeta.length; c++) {
+                        var meta = colMeta[c];
+                        var cell = (row && row.length > meta.idx) ? row[meta.idx] : '';
+                        if (meta.mappedKeys && meta.mappedKeys.length) {
+                            var k0 = meta.mappedKeys[0];
+                            if (String(k0 || '').indexOf('custom:') === 0) {
+                                tr.appendChild(td(String(cellToTextForImportTarget(cell, customTypeForKey(k0)) || '').trim()));
+                            } else {
+                                tr.appendChild(td(String(cellToText(cell, k0) || '').trim()));
+                            }
+                        } else {
+                            tr.appendChild(td(cell == null ? '' : String(cell)));
+                        }
+                    }
+                    importPreviewBody.appendChild(tr);
+                }
+
+                importPreviewWrap.style.display = 'block';
+                importConfirmBtn.disabled = !(stats && stats.total);
+                downloadImportReportBtn.disabled = !(stats && stats.warnings);
+            }
+
+            function downloadImportReport() {
+                if (!importState.reportCsv) return;
+                var blob = new Blob([importState.reportCsv], { type: 'text/csv;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+                var d = new Date();
+                var yyyy = String(d.getFullYear());
+                var mm = String(d.getMonth() + 1).padStart(2, '0');
+                var dd = String(d.getDate()).padStart(2, '0');
+                var filename = 'sss-inventory-import-report-' + yyyy + '-' + mm + '-' + dd + '.csv';
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () {
+                    URL.revokeObjectURL(url);
+                }, 0);
+            }
+
+            function doImport() {
+                if (!importState.validRecords.length) return;
+                var skippedLabels = (importState.unmappedLabels && importState.unmappedLabels.length) ? importState.unmappedLabels.slice() : [];
+                var targetSheetId = getImportTargetSheetId();
+                var wb = readWorkbook();
+                var existing = currentRecords(targetSheetId);
+                var beforeTotals = totalsSnapshot(existing);
+                var next = sanitizeRecords(importState.validRecords).concat(sanitizeRecords(existing));
+                var afterTotals = totalsSnapshot(next);
+                wb.recordsBySheet[targetSheetId] = next;
+                touchSheetUpdatedAt(wb, targetSheetId);
+                writeWorkbook(wb);
+
+                // Mirror the imported file's layout into the target sheet (headers, visibility, custom ordering)
+                try { applyImportedLayoutToSheet(targetSheetId); } catch (e) {}
+
+                if (String(readWorkbook().activeSheetId || '') === String(targetSheetId)) {
+                    renderRecords(next);
+                    currentPage = 1;
+                    applyFilter(search.value);
+                }
+
+                appendAudit({
+                    action: 'import',
+                    module: 'import',
+                    user: user,
+                    tsIso: new Date().toISOString(),
+                    recordLabel: importState.sourceFileName || (importFile && importFile.files && importFile.files[0] ? importFile.files[0].name : ''),
+                    details: (function () {
+                        var c = customImportFields();
+                        var mapped = [];
+                        for (var i = 0; i < c.length; i++) {
+                            var k = c[i].key;
+                            if (importState.mapping && importState.mapping[k] !== '' && importState.mapping[k] != null) {
+                                mapped.push(String(c[i].label || ''));
+                            }
+                        }
+                        var s = sheetById(readWorkbook(), targetSheetId);
+                        var sheetName = s ? String(s.name || '') : '';
+                        var base = 'Sheet: ' + (sheetName || targetSheetId) + ' | Imported: ' + String(importState.validRecords.length) + ' | Warnings: ' + String(importState.failures.length);
+                        base += ' | Totals: ' + beforeTotals + ' -> ' + afterTotals;
+                        var parts = [base];
+                        if (mapped.length) parts.push('Custom fields mapped: ' + mapped.join(' / '));
+                        try {
+                            var inf = Array.isArray(importState.inferredMeta) ? importState.inferredMeta : [];
+                            if (inf.length) {
+                                var infLabels = [];
+                                for (var ii = 0; ii < inf.length; ii++) {
+                                    var im = inf[ii] || {};
+                                    infLabels.push((im.inferredKey || '?') + '@C' + String((im.colIndex || 0) + 1) + ' (' + String(im.confidence || 0) + '%)');
+                                }
+                                parts.push('Inferred: ' + infLabels.join(' | '));
+                            }
+                            var ign = Array.isArray(importState.ignoredCols) ? importState.ignoredCols : [];
+                            if (ign.length) {
+                                var ignLabels = [];
+                                for (var jj = 0; jj < ign.length; jj++) ignLabels.push('C' + String(ign[jj] + 1));
+                                parts.push('Ignored columns: ' + ignLabels.join(', '));
+                            }
+                        } catch (e) {}
+                        return parts.join(' | ');
+                    })()
+                });
+
+                var msg = 'Imported ' + String(importState.validRecords.length) + ' record(s). Warnings: ' + String(importState.failures.length) + '.';
+                if (skippedLabels.length) msg += ' Some fields were not mapped and were skipped during import.';
+                showToast(msg);
+
+                importState.headers = [];
+                importState.rows = [];
+                importState.mapping = {};
+                importState.validRecords = [];
+                importState.failures = [];
+                importState.reportCsv = '';
+                importState.sourceFileName = '';
+
+                if (importFile) importFile.value = '';
+                if (importHint) importHint.textContent = '';
+                if (importMapping) importMapping.innerHTML = '';
+                if (importPreviewHead) importPreviewHead.innerHTML = '';
+                if (importPreviewBody) importPreviewBody.innerHTML = '';
+                if (importPreviewWrap) importPreviewWrap.style.display = 'none';
+                if (importBody) importBody.style.display = 'none';
+                importConfirmBtn.disabled = true;
+                downloadImportReportBtn.disabled = true;
+            }
+
+            function ensureRecordsTableColumns() {
+                if (!table || !table.tHead) return;
+                var thead = table.tHead;
+                thead.innerHTML = '';
+                var groupRow = document.createElement('tr');
+                var leafRow = document.createElement('tr');
+                thead.appendChild(groupRow);
+                thead.appendChild(leafRow);
+
+                function readHeaderLabelsForActive() {
+                    var wb = readWorkbook();
+                    var sid = String(wb.activeSheetId || '');
+                    var defaults = {
+                        recno: 'REC#', deptcd: 'DEPTCD', deptbranch: 'DEPT/BRANCH', tmnum: 'TMNUM', description: 'DESCRIPTION',
+                        sernum: 'SERNUM', oldppronum: 'OLD PPRONUM', pronum: 'PRONUM', acqdte: 'ACQDTE', acqcst: 'ACQCST',
+                        accdep: 'ACCDEP', bvalue: 'BVALUE', usercd: 'USERCD', lastname: 'LAST NAME', firstname: 'FIRST NAME',
+                        middlename: 'MIDDLE NAME', status: 'STATUS', action: 'ACTION'
+                    };
+                    var map = (wb.headerLabelsBySheet && wb.headerLabelsBySheet[sid]) ? wb.headerLabelsBySheet[sid] : {};
+                    var out = {};
+                    for (var k in defaults) out[k] = (map && map[k] != null && String(map[k]).trim() !== '') ? String(map[k]) : defaults[k];
+                    return out;
+                }
+
+                function readColumnOrderForActive() {
+                    var wb = readWorkbook();
+                    var sid = String(wb.activeSheetId || '');
+                    var arr = wb.columnOrderBySheet && wb.columnOrderBySheet[sid];
+                    return Array.isArray(arr) ? arr.slice() : [];
+                }
+
+                function defaultColumnOrder() {
+                    var wb = readWorkbook();
+                    var sid = String(wb.activeSheetId || '');
+                    var base = ['deptcd','deptbranch','tmnum','description','sernum','oldppronum','pronum','acqdte','acqcst','accdep','bvalue','usercd','lastname','firstname','middlename'];
+                    var defs = customFieldsForUse(sid);
+                    defs.sort(function(a,b){
+                        var ao = (a && a.orderBySheet && a.orderBySheet[sid] != null) ? a.orderBySheet[sid] : 1e9;
+                        var bo = (b && b.orderBySheet && b.orderBySheet[sid] != null) ? b.orderBySheet[sid] : 1e9;
+                        return (ao - bo);
+                    });
+                    for (var i = 0; i < defs.length; i++) base.push('custom:' + String(defs[i].id || ''));
+                    return base;
+                }
+
+                var labels = readHeaderLabelsForActive();
+                var order = readColumnOrderForActive();
+                if (!order.length) order = defaultColumnOrder();
+
+                // Rebuild header row entirely in the desired order
+                ;
+
+                function appendThForStandard(key) {
+                    var th = document.createElement('th');
+                    if (key === 'acqcst' || key === 'accdep' || key === 'bvalue') th.className = 'num';
+                    if (key === 'description') th.className = 'desc';
+                    th.textContent = labels[key] || key.toUpperCase();
+                    th.setAttribute('data-standard-key', key);
+                    leafRow.appendChild(th);
+                }
+
+                function appendThForCustom(id) {
+                    var defs = customFieldsForUse();
+                    var name = '';
+                    var type = 'text';
+                    for (var i = 0; i < defs.length; i++) {
+                        if (String(defs[i] && defs[i].id || '') === String(id)) { name = String(defs[i].name || ''); type = String(defs[i].type || 'text'); break; }
+                    }
+                    var th = document.createElement('th');
+                    th.textContent = name || ('Custom ' + id);
+                    th.setAttribute('data-custom-field-id', String(id));
+                    th.setAttribute('data-col-type', type);
+                    leafRow.appendChild(th);
+                }
+
+                // Helpers for grouped month headers
+                function isMonthLikeLabel(s) {
+                    return /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i.test(String(s || '').trim());
+                }
+                function parseMonthSub(name) {
+                    var t = String(name == null ? '' : name).trim();
+                    if (!t) return null;
+                    var parts = t.split(' - ');
+                    if (parts.length >= 2 && isMonthLikeLabel(parts[0])) {
+                        return { month: parts[0], sub: parts.slice(1).join(' - ') };
+                    }
+                    return null;
+                }
+                function findCustomDefById(id) {
+                    var defs = customFieldsForUse();
+                    for (var i = 0; i < defs.length; i++) {
+                        if (String(defs[i] && defs[i].id || '') === String(id)) return defs[i];
+                    }
+                    return null;
+                }
+                function appendCustomChildTh(id, label, type) {
+                    var th = document.createElement('th');
+                    th.textContent = label || ('Custom ' + id);
+                    th.setAttribute('data-custom-field-id', String(id));
+                    th.setAttribute('data-col-type', String(type || 'text'));
+                    leafRow.appendChild(th);
+                }
+
+                // REC# first
+                var thRec = document.createElement('th');
+                thRec.className = 'num';
+                thRec.textContent = labels.recno || 'REC#';
+                thRec.setAttribute('data-system-col', 'recno');
+                leafRow.appendChild(thRec);
+                var ph = document.createElement('th'); ph.textContent = ''; groupRow.appendChild(ph);
+
+                for (var oi = 0; oi < order.length; ) {
+                    var tok = order[oi];
+                    if (!tok) { oi++; continue; }
+                    if (String(tok).indexOf('custom:') !== 0) {
+                        appendThForStandard(String(tok));
+                        var phStd = document.createElement('th'); phStd.textContent = ''; groupRow.appendChild(phStd);
+                        oi++;
+                        continue;
+                    }
+                    var id = String(tok).slice('custom:'.length);
+                    var def = findCustomDefById(id) || {};
+                    var nm = String(def.name || '');
+                    var tp = String(def.type || 'text');
+                    var monthLbl = String(def.groupMonth || '');
+                    var subLbl = String(def.groupChild || '');
+                    var parsed = !monthLbl ? parseMonthSub(nm) : { month: monthLbl, sub: (subLbl || (nm.split(' - ').slice(1).join(' - ') || nm)) };
+                    if (!parsed) {
+                        appendThForCustom(id);
+                        var phC = document.createElement('th'); phC.textContent = ''; groupRow.appendChild(phC);
+                        oi++;
+                        continue;
+                    }
+                    var monthLabel = parsed.month;
+                    // lookahead to count children under same month
+                    var children = [];
+                    var j = oi;
+                    while (j < order.length) {
+                        var t2 = order[j];
+                        if (String(t2).indexOf('custom:') !== 0) break;
+                        var id2 = String(t2).slice('custom:'.length);
+                        var def2 = findCustomDefById(id2) || {};
+                        var nm2 = String(def2.name || '');
+                        var tp2 = String(def2.type || 'text');
+                        var month2 = String(def2.groupMonth || '');
+                        var sub2 = String(def2.groupChild || '');
+                        var p2 = month2 ? { month: month2, sub: (sub2 || (nm2.split(' - ').slice(1).join(' - ') || nm2)) } : parseMonthSub(nm2);
+                        if (!p2 || p2.month !== monthLabel) break;
+                        children.push({ id: id2, label: p2.sub || nm2, type: tp2 });
+                        j++;
+                    }
+                    var gth = document.createElement('th');
+                    gth.textContent = monthLabel;
+                    gth.colSpan = Math.max(1, children.length);
+                    groupRow.appendChild(gth);
+                    for (var ci = 0; ci < children.length; ci++) {
+                        appendCustomChildTh(children[ci].id, children[ci].label, children[ci].type);
+                    }
+                    oi = j;
+                }
+
+                var thStatus = document.createElement('th');
+                thStatus.textContent = labels.status || 'STATUS';
+                thStatus.setAttribute('data-system-col', 'status');
+                leafRow.appendChild(thStatus);
+                var phS = document.createElement('th'); phS.textContent = ''; groupRow.appendChild(phS);
+
+                var thAction = document.createElement('th');
+                thAction.textContent = labels.action || 'ACTION';
+                thAction.setAttribute('data-system-col', 'action');
+                leafRow.appendChild(thAction);
+                var phA = document.createElement('th'); phA.textContent = ''; groupRow.appendChild(phA);
+                updateTotalsKpiVisibility();
+            }
+
+            function updateRecordTableColumnVisibility(records) {
+                if (!table || !table.tHead || !table.tHead.rows || !table.tHead.rows.length) return;
+
+                var hideMap = hiddenColsForActive();
+                var headerCells = table.tHead.rows[0].cells;
+                var hideAtIndex = [];
+                for (var c = 0; c < headerCells.length; c++) {
+                    var th = headerCells[c];
+                    var token = th.getAttribute('data-standard-key') || th.getAttribute('data-system-col') || (th.getAttribute('data-custom-field-id') ? ('custom:' + th.getAttribute('data-custom-field-id')) : '');
+                    var hide = token && hideMap && hideMap[String(token)] ? true : false;
+                    hideAtIndex[c] = hide;
+                    th.style.display = hide ? 'none' : '';
+                }
+
+                var bodyRows = table.tBodies && table.tBodies.length ? table.tBodies[0].rows : [];
+                for (var rr = 0; rr < bodyRows.length; rr++) {
+                    var rowCells = bodyRows[rr].cells;
+                    for (var cc = 0; cc < rowCells.length; cc++) {
+                        rowCells[cc].style.display = hideAtIndex[cc] ? 'none' : '';
+                    }
+                }
+                updateTotalsKpiVisibility();
+            }
+
+            // Persist per-sheet header label overrides
+            function setHeaderLabelOverride(keyOrSystem, newLabel, sheetId) {
+                var wb = readWorkbook();
+                var sid = sheetId ? String(sheetId) : String(wb.activeSheetId || '');
+                if (!wb.headerLabelsBySheet || typeof wb.headerLabelsBySheet !== 'object') wb.headerLabelsBySheet = {};
+                if (!wb.headerLabelsBySheet[sid] || typeof wb.headerLabelsBySheet[sid] !== 'object') wb.headerLabelsBySheet[sid] = {};
+                wb.headerLabelsBySheet[sid][String(keyOrSystem)] = String(newLabel || '');
+                touchSheetUpdatedAt(wb, sid);
+                writeWorkbook(wb);
+            }
+
+            function clearHeaderLabelOverride(keyOrSystem) {
+                var wb = readWorkbook();
+                var sid = String(wb.activeSheetId || '');
+                if (wb.headerLabelsBySheet && wb.headerLabelsBySheet[sid]) {
+                    delete wb.headerLabelsBySheet[sid][String(keyOrSystem)];
+                    touchSheetUpdatedAt(wb, sid);
+                    writeWorkbook(wb);
+                }
+            }
+
+            // Column hiding (per sheet)
+            function hiddenColsForActive() {
+                var wb = readWorkbook();
+                var sid = String(wb.activeSheetId || '');
+                return (wb.hiddenColumnsBySheet && wb.hiddenColumnsBySheet[sid]) ? wb.hiddenColumnsBySheet[sid] : {};
+            }
+
+            function setHiddenColumn(token, hidden, sheetId) {
+                var wb = readWorkbook();
+                var sid = sheetId ? String(sheetId) : String(wb.activeSheetId || '');
+                if (!wb.hiddenColumnsBySheet || typeof wb.hiddenColumnsBySheet !== 'object') wb.hiddenColumnsBySheet = {};
+                if (!wb.hiddenColumnsBySheet[sid] || typeof wb.hiddenColumnsBySheet[sid] !== 'object') wb.hiddenColumnsBySheet[sid] = {};
+                if (hidden) wb.hiddenColumnsBySheet[sid][String(token)] = true; else delete wb.hiddenColumnsBySheet[sid][String(token)];
+                touchSheetUpdatedAt(wb, sid);
+                writeWorkbook(wb);
+            }
+
+            function clearAllHiddenColumns() {
+                var wb = readWorkbook();
+                var sid = String(wb.activeSheetId || '');
+                if (wb.hiddenColumnsBySheet && wb.hiddenColumnsBySheet[sid]) {
+                    delete wb.hiddenColumnsBySheet[sid];
+                    touchSheetUpdatedAt(wb, sid);
+                    writeWorkbook(wb);
+                }
+            }
+
+            // Header rename interaction (dblclick)
+            if (table && table.tHead) {
+                table.tHead.addEventListener('dblclick', function (e) {
+                    var th = e.target && e.target.closest('th');
+                    if (!th || !table.tHead.contains(th)) return;
+
+                    // Custom field header rename -> update the custom field definition name
+                    var cfid = th.getAttribute('data-custom-field-id');
+                    if (cfid) {
+                        var current = (th.textContent || '').trim();
+                        var next = prompt('Rename column:', current);
+                        if (next == null) return;
+                        next = String(next || '').trim();
+                        if (!next || next === current) return;
+
+                        var defs = readCustomFields();
+                        var found = null;
+                        for (var i = 0; i < defs.length; i++) {
+                            if (String(defs[i] && defs[i].id || '') === String(cfid)) { found = defs[i]; break; }
+                        }
+                        if (!found) return;
+                        var before = String(found.name || '');
+                        found.name = next;
+                        found.updatedAt = new Date().toISOString();
+                        writeCustomFields(defs);
+
+                        appendAudit({
+                            action: 'update',
+                            module: 'custom_fields',
+                            user: user,
+                            tsIso: new Date().toISOString(),
+                            recordId: String(found.id || ''),
+                            recordLabel: next,
+                            details: 'Renamed custom field from header',
+                            changes: [{ field: 'name', oldValue: before, newValue: next }]
+                        });
+
+                        ensureRecordsTableColumns();
+                        return;
+                    }
+
+                    // Standard/system headers: save per-sheet label override
+                    var key = th.getAttribute('data-standard-key');
+                    var system = th.getAttribute('data-system-col');
+                    var token = key || system;
+                    if (!token) return;
+                    var currentText = (th.textContent || '').trim();
+                    var nextLabel = prompt('Rename column:', currentText);
+                    if (nextLabel == null) return;
+                    nextLabel = String(nextLabel || '').trim();
+                    if (!nextLabel || nextLabel === currentText) return;
+
+                    setHeaderLabelOverride(token, nextLabel);
+                    appendAudit({
+                        action: 'update',
+                        module: 'layout',
+                        user: user,
+                        tsIso: new Date().toISOString(),
+                        details: 'Renamed header ' + token + ' to ' + nextLabel
+                    });
+
+                    ensureRecordsTableColumns();
+                });
+            }
+
+            // Header CRUD via context menu (right-click)
+            (function setupHeaderContextMenu() {
+                if (!table || !table.tHead) return;
+                var menu = null;
+
+                function hideMenu() {
+                    if (menu && menu.parentNode) menu.parentNode.removeChild(menu);
+                    menu = null;
+                    document.removeEventListener('click', onDocClick, true);
+                }
+
+                function onDocClick(e) { hideMenu(); }
+
+                function showMenu(x, y, items) {
+                    hideMenu();
+                    menu = document.createElement('div');
+                    menu.style.position = 'fixed';
+                    menu.style.left = String(x) + 'px';
+                    menu.style.top = String(y) + 'px';
+                    menu.style.background = '#fff';
+                    menu.style.border = '1px solid #ccc';
+                    menu.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)';
+                    menu.style.zIndex = '9999';
+                    menu.style.minWidth = '180px';
+                    for (var i = 0; i < items.length; i++) {
+                        (function (it) {
+                            var btn = document.createElement('div');
+                            btn.textContent = it.label;
+                            btn.style.padding = '8px 12px';
+                            btn.style.cursor = 'pointer';
+                            btn.addEventListener('mouseenter', function(){ btn.style.background = '#f5f5f5'; });
+                            btn.addEventListener('mouseleave', function(){ btn.style.background = '#fff'; });
+                            btn.addEventListener('click', function(){ hideMenu(); it.onClick(); });
+                            menu.appendChild(btn);
+                        })(items[i]);
+                    }
+                    document.body.appendChild(menu);
+                    setTimeout(function(){ document.addEventListener('click', onDocClick, true); }, 0);
+                }
+
+                function quickAddCustomField(defaultName) {
+                    var name = prompt('New column name:', defaultName || '');
+                    if (name == null) return;
+                    name = String(name || '').trim();
+                    if (!name) return;
+                    var type = prompt('Field type (text, number, decimal, date):', 'text');
+                    if (type == null) return;
+                    type = String(type || 'text').toLowerCase();
+                    if (['text','number','decimal','date'].indexOf(type) === -1) type = 'text';
+
+                    var wb = readWorkbook();
+                    var sid = String(wb.activeSheetId || '');
+
+                    var defs = readCustomFields();
+                    var newDef = {
+                        id: newId('cf'),
+                        name: name,
+                        nameKey: normalizeCustomFieldName(name),
+                        type: type,
+                        required: false,
+                        sheetId: sid,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    };
+                    defs.push(newDef);
+                    writeCustomFields(defs);
+
+                    try {
+                        var order = (wb.columnOrderBySheet && wb.columnOrderBySheet[sid]) ? wb.columnOrderBySheet[sid].slice() : [];
+                        if (!order.length && table && table.tHead && table.tHead.rows && table.tHead.rows[0]) {
+                            var cells = table.tHead.rows[0].cells;
+                            for (var i = 0; i < cells.length; i++) {
+                                var th = cells[i];
+                                var k = th.getAttribute('data-standard-key');
+                                var cid = th.getAttribute('data-custom-field-id');
+                                if (k) order.push(k); else if (cid) order.push('custom:' + String(cid));
+                            }
+                        }
+                        order.push('custom:' + String(newDef.id));
+                        if (!wb.columnOrderBySheet || typeof wb.columnOrderBySheet !== 'object') wb.columnOrderBySheet = {};
+                        wb.columnOrderBySheet[sid] = order;
+                        setHiddenColumn('custom:' + String(newDef.id), false, sid);
+                        touchSheetUpdatedAt(wb, sid);
+                        writeWorkbook(wb);
+                    } catch (e) {}
+
+                    appendAudit({
+                        action: 'create',
+                        module: 'custom_fields',
+                        user: user,
+                        tsIso: new Date().toISOString(),
+                        recordId: String(newDef.id),
+                        recordLabel: String(newDef.name || ''),
+                        details: 'Created custom field from header menu'
+                    });
+
+                    ensureRecordsTableColumns();
+                    renderRecords(currentRecords());
+                    applyFilter(search.value);
+                    showToast('Added column: ' + name);
+                }
+
+                function deleteCustomFieldById(fid) {
+                    var defs = readCustomFields();
+                    var del = null;
+                    var nextDefs = [];
+                    for (var i = 0; i < defs.length; i++) {
+                        if (String(defs[i] && defs[i].id || '') === String(fid)) del = defs[i]; else nextDefs.push(defs[i]);
+                    }
+                    if (!del) return;
+                    writeCustomFields(nextDefs);
+
+                    var wb = readWorkbook();
+                    var targetSid = del.sheetId == null ? '' : String(del.sheetId);
+                    var sheetIds = [];
+                    if (targetSid) sheetIds = [targetSid]; else {
+                        for (var s = 0; s < (wb.sheets ? wb.sheets.length : 0); s++) {
+                            var id = String(wb.sheets[s] && wb.sheets[s].id || '');
+                            if (id) sheetIds.push(id);
+                        }
+                    }
+                    for (var si = 0; si < sheetIds.length; si++) {
+                        var sid = sheetIds[si];
+                        var list = (wb.recordsBySheet && wb.recordsBySheet[sid]) ? wb.recordsBySheet[sid] : [];
+                        for (var r = 0; r < list.length; r++) {
+                            if (list[r] && list[r].custom && typeof list[r].custom === 'object') delete list[r].custom[String(fid)];
+                        }
+                        if (wb.recordsBySheet) wb.recordsBySheet[sid] = list;
+                        touchSheetUpdatedAt(wb, sid);
+                    }
+                    writeWorkbook(wb);
+
+                    appendAudit({
+                        action: 'delete',
+                        module: 'custom_fields',
+                        user: user,
+                        tsIso: new Date().toISOString(),
+                        recordId: String(del.id || ''),
+                        recordLabel: String(del.name || ''),
+                        details: 'Deleted custom field from header menu'
+                    });
+
+                    ensureRecordsTableColumns();
+                    renderRecords(currentRecords());
+                    applyFilter(search.value);
+                    showToast('Deleted column');
+                }
+
+                table.tHead.addEventListener('contextmenu', function (e) {
+                    var th = e.target && e.target.closest('th');
+                    if (!th || !table.tHead.contains(th)) return;
+                    e.preventDefault();
+
+                    var items = [];
+                    var cfid = th.getAttribute('data-custom-field-id');
+                    if (cfid) {
+                        items.push({ label: 'Rename Column', onClick: function(){ var cur=(th.textContent||'').trim(); var next=prompt('Rename column:', cur); if(next==null) return; next=String(next||'').trim(); if(!next||next===cur) return; var defs=readCustomFields(); var found=null; for(var i=0;i<defs.length;i++){ if(String(defs[i]&&defs[i].id||'')===String(cfid)){ found=defs[i]; break; } } if(!found) return; var before=String(found.name||''); found.name=next; found.updatedAt=new Date().toISOString(); writeCustomFields(defs); appendAudit({ action:'update', module:'custom_fields', user:user, tsIso:new Date().toISOString(), recordId:String(found.id||''), recordLabel:next, details:'Renamed custom field from header', changes:[{field:'name', oldValue:before, newValue:next}]} ); ensureRecordsTableColumns(); } });
+                        try { var defs2 = readCustomFields(); var found2=null; for(var di=0;di<defs2.length;di++){ if(String(defs2[di]&&defs2[di].id||'')===String(cfid)){ found2=defs2[di]; break; } } if(found2 && (String(found2.type||'')==='number' || String(found2.type||'')==='decimal')) { items.push({ label: 'Sum This Column', onClick: function(){ var tok='custom:'+String(cfid); var s=sumFilteredColumnByToken(tok); showToast('Sum: '+formatTotal(s)); } }); } } catch(e) {}
+                        items.push({ label: 'Delete Column', onClick: function(){ if(!confirm('Hide this column from this sheet? Data and import mapping will be preserved.')) return; setHiddenColumn('custom:'+cfid, true); appendAudit({ action:'update', module:'layout', user:user, tsIso:new Date().toISOString(), details:'Hidden column custom:'+cfid }); ensureRecordsTableColumns(); renderRecords(currentRecords()); applyFilter(search.value); } });
+                        items.push({ label: 'Delete Field Permanently…', onClick: function(){ if(!confirm('Permanently delete this custom field and remove its values from records? This affects import mapping availability for this field.')) return; deleteCustomFieldById(cfid); } });
+                        items.push({ label: 'Unhide All Columns', onClick: function(){ clearAllHiddenColumns(); appendAudit({ action:'update', module:'layout', user:user, tsIso:new Date().toISOString(), details:'Unhide all columns' }); ensureRecordsTableColumns(); renderRecords(currentRecords()); applyFilter(search.value); } });
+                    } else {
+                        var key = th.getAttribute('data-standard-key');
+                        var system = th.getAttribute('data-system-col');
+                        var token = key || system;
+                        if (token) {
+                            items.push({ label: 'Rename Header', onClick: function(){ var cur=(th.textContent||'').trim(); var next=prompt('Rename column:', cur); if(next==null) return; next=String(next||'').trim(); if(!next||next===cur) return; setHeaderLabelOverride(token, next); appendAudit({ action:'update', module:'layout', user:user, tsIso:new Date().toISOString(), details:'Renamed header '+token+' to '+next }); ensureRecordsTableColumns(); } });
+                            items.push({ label: 'Reset Header Name', onClick: function(){ clearHeaderLabelOverride(token); appendAudit({ action:'update', module:'layout', user:user, tsIso:new Date().toISOString(), details:'Reset header label for '+token }); ensureRecordsTableColumns(); } });
+                            if (token==='acqcst' || token==='accdep' || token==='bvalue') { items.push({ label: 'Sum This Column', onClick: function(){ var s=sumFilteredColumnByToken(token); showToast('Sum: '+formatTotal(s)); } }); }
+                            items.push({ label: 'Delete Column', onClick: function(){ if(!confirm('Hide this column from this sheet? Data and import mapping will be preserved.')) return; setHiddenColumn(token, true); appendAudit({ action:'update', module:'layout', user:user, tsIso:new Date().toISOString(), details:'Hidden column '+token }); ensureRecordsTableColumns(); renderRecords(currentRecords()); applyFilter(search.value); } });
+                            items.push({ label: 'Add Custom Column…', onClick: function(){ quickAddCustomField(''); } });
+                            items.push({ label: 'Unhide All Columns', onClick: function(){ clearAllHiddenColumns(); appendAudit({ action:'update', module:'layout', user:user, tsIso:new Date().toISOString(), details:'Unhide all columns' }); ensureRecordsTableColumns(); renderRecords(currentRecords()); applyFilter(search.value); } });
+                        }
+                    }
+                    if (!items.length) return;
+                    showMenu(e.clientX, e.clientY, items);
+                });
+            })();
+
+            (function () {
+                if (!tbody || !table || !table.tHead || !table.tHead.rows || !table.tHead.rows.length) return;
+                var menu = null;
+                function hide() { if (menu && menu.parentNode) menu.parentNode.removeChild(menu); menu = null; document.removeEventListener('click', onDoc, true); }
+                function onDoc() { hide(); }
+                function show(x, y, items) {
+                    hide();
+                    menu = document.createElement('div');
+                    menu.style.position = 'fixed';
+                    menu.style.left = String(x) + 'px';
+                    menu.style.top = String(y) + 'px';
+                    menu.style.background = '#fff';
+                    menu.style.border = '1px solid #ccc';
+                    menu.style.boxShadow = '0 4px 12px rgba(0,0,0,0.12)';
+                    menu.style.zIndex = '9999';
+                    for (var i = 0; i < items.length; i++) {
+                        (function(it){
+                            var node = document.createElement('div');
+                            node.textContent = it.label;
+                            node.style.padding = '8px 12px';
+                            node.style.cursor = 'pointer';
+                            node.addEventListener('mouseenter', function(){ node.style.background = '#f5f5f5'; });
+                            node.addEventListener('mouseleave', function(){ node.style.background = '#fff'; });
+                            node.addEventListener('click', function(){ hide(); it.onClick(); });
+                            menu.appendChild(node);
+                        })(items[i]);
+                    }
+                    document.body.appendChild(menu);
+                    setTimeout(function(){ document.addEventListener('click', onDoc, true); }, 0);
+                }
+
+                function insertCustomColumnAt(name, type, afterToken) {
+                    var wb = readWorkbook();
+                    var sid = String(wb.activeSheetId || '');
+                    var defs = readCustomFields();
+                    var def = { id: newId('cf'), name: name, nameKey: normalizeCustomFieldName(name), type: type, required: false, sheetId: sid, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                    defs.push(def);
+                    writeCustomFields(defs);
+                    var order = (wb.columnOrderBySheet && wb.columnOrderBySheet[sid]) ? wb.columnOrderBySheet[sid].slice() : [];
+                    if (!order.length) {
+                        var rowsHead = table.tHead.rows;
+                        var cells = rowsHead[rowsHead.length - 1].cells;
+                        for (var i = 0; i < cells.length; i++) {
+                            var th = cells[i];
+                            var k = th.getAttribute('data-standard-key');
+                            var cid = th.getAttribute('data-custom-field-id');
+                            if (k) order.push(k); else if (cid) order.push('custom:' + String(cid));
+                        }
+                    }
+                    var tok = 'custom:' + String(def.id);
+                    var pos = -1;
+                    for (var j = 0; j < order.length; j++) { if (String(order[j]) === String(afterToken)) { pos = j; break; } }
+                    if (pos >= 0) order.splice(pos + 1, 0, tok); else order.push(tok);
+                    if (!wb.columnOrderBySheet || typeof wb.columnOrderBySheet !== 'object') wb.columnOrderBySheet = {};
+                    wb.columnOrderBySheet[sid] = order;
+                    setHiddenColumn(tok, false, sid);
+                    touchSheetUpdatedAt(wb, sid);
+                    writeWorkbook(wb);
+                    appendAudit({ action: 'create', module: 'custom_fields', user: user, tsIso: new Date().toISOString(), recordId: String(def.id), recordLabel: name, details: 'Created custom field from body menu' });
+                    ensureRecordsTableColumns();
+                    renderRecords(currentRecords());
+                    applyFilter(search.value);
+                    showToast('Added column: ' + name);
+                }
+
+                tbody.addEventListener('contextmenu', function (e) {
+                    var td = e.target && e.target.closest('td');
+                    if (!td || !tbody.contains(td)) return;
+                    e.preventDefault();
+                    var rowsHead = table.tHead.rows;
+                    var headerRow = rowsHead[rowsHead.length - 1];
+                    var idx = td.cellIndex;
+                    var afterToken = '';
+                    var sumToken = '';
+                    var canSum = false;
+                    if (headerRow && headerRow.cells && headerRow.cells[idx]) {
+                        var th = headerRow.cells[idx];
+                        var k = th.getAttribute('data-standard-key');
+                        var cid = th.getAttribute('data-custom-field-id');
+                        var ctype = th.getAttribute('data-col-type');
+                        if (k) afterToken = k; else if (cid) afterToken = 'custom:' + String(cid);
+                        if (k) sumToken = k; else if (cid) sumToken = 'custom:' + String(cid);
+                        if (k === 'acqcst' || k === 'accdep' || k === 'bvalue') canSum = true;
+                        if (cid && (ctype === 'number' || ctype === 'decimal')) canSum = true;
+                    }
+                    var items = [];
+                    if (sumToken && canSum) { items.push({ label: 'Sum This Column', onClick: function(){ var s=sumFilteredColumnByToken(sumToken); showToast('Sum: '+formatTotal(s)); } }); }
+                    items.push({ label: 'Add Custom Column…', onClick: function(){ var name = prompt('New column name:', ''); if (name == null) return; name = String(name || '').trim(); if (!name) return; var type = prompt('Field type (text, number, decimal, date):', 'text'); if (type == null) return; type = String(type || 'text').toLowerCase(); if (['text','number','decimal','date'].indexOf(type) === -1) type = 'text'; insertCustomColumnAt(name, type, afterToken); } });
+                    show(e.clientX, e.clientY, items);
+                });
+            })();
+
+            function renderRecords(records) {
+                ensureRecordsTableColumns();
+                var recordsForRender = (records || []).slice();
+
+                var wbActive = readWorkbook();
+                var activeSheetIdForLinks = String(wbActive.activeSheetId || '');
+
+                function readColumnOrderForActive() {
+                    var sid = String(wbActive.activeSheetId || '');
+                    var arr = wbActive.columnOrderBySheet && wbActive.columnOrderBySheet[sid];
+                    if (Array.isArray(arr) && arr.length) return arr.slice();
+                    // fallback
+                    var base = ['deptcd','deptbranch','tmnum','description','sernum','oldppronum','pronum','acqdte','acqcst','accdep','bvalue','usercd','lastname','firstname','middlename'];
+                    var defs = customFieldsForUse(sid);
+                    defs.sort(function(a,b){
+                        var ao = (a && a.orderBySheet && a.orderBySheet[sid] != null) ? a.orderBySheet[sid] : 1e9;
+                        var bo = (b && b.orderBySheet && b.orderBySheet[sid] != null) ? b.orderBySheet[sid] : 1e9;
+                        return (ao - bo);
+                    });
+                    for (var i = 0; i < defs.length; i++) base.push('custom:' + String(defs[i].id || ''));
+                    return base;
+                }
+
+                var columnOrder = readColumnOrderForActive();
+
+                var latestUpdateById = {};
+                var list = auditCache && auditCache.length ? auditCache : [];
+                for (var ai = 0; ai < list.length; ai++) {
+                    var e = list[ai] || {};
+                    if (normalize(e.action || '') !== 'update') continue;
+                    if (!e.changes || !e.changes.length) continue;
+                    var rid = String(e.recordId || '');
+                    if (!rid) continue;
+                    var cur = latestUpdateById[rid];
+                    if (!cur) { latestUpdateById[rid] = e; continue; }
+                    var ct = Date.parse(cur.tsIso || cur.ts || '') || 0;
+                    var et = Date.parse(e.tsIso || e.ts || '') || 0;
+                    if (et > ct) latestUpdateById[rid] = e;
+                }
+
+                tbody.innerHTML = '';
+
+                emptyState.style.display = recordsForRender.length ? 'none' : 'block';
+                tableWrap.style.display = recordsForRender.length ? 'block' : 'none';
+
+                // lookup for custom field types
+                var customDefs = customFieldsForUse();
+                var customTypeById = {};
+                for (var ci = 0; ci < customDefs.length; ci++) {
+                    var d = customDefs[ci] || {};
+                    if (d.id) customTypeById[String(d.id)] = String(d.type || 'text');
+                }
+
+                function td(text, cls) {
+                    var cell = document.createElement('td');
+                    if (cls) cell.className = cls;
+                    cell.textContent = text == null ? '' : String(text);
+                    return cell;
+                }
+
+                for (var i = 0; i < recordsForRender.length; i++) {
+                    var r = recordsForRender[i];
+                    var tr = document.createElement('tr');
+                    tr.setAttribute('data-record-id', String(r.id || ''));
+
+                    var customValues = (r.custom && typeof r.custom === 'object') ? r.custom : {};
+                    var latestUpdateForRow = latestUpdateById[String(r.id)] || null;
+                    tr.dataset.status = latestUpdateForRow ? 'updated' : 'no_change';
+
+                    tr.dataset.deptbranch = normalize(r.deptbranch);
+                    tr.dataset.acqdte = r.acqdte || '';
+                    tr.dataset.costbucket = costBucket(r);
+                    tr.dataset.acqcst = r.acqcst == null ? '' : String(r.acqcst);
+                    tr.dataset.accdep = r.accdep == null ? '' : String(r.accdep);
+                    tr.dataset.bvalue = r.bvalue == null ? '' : String(r.bvalue);
+                    tr.dataset.search = normalize([
+                        r.deptcd, r.deptbranch, r.tmnum, r.description, r.sernum, r.oldppronum, r.pronum,
+                        r.acqdte, formatMoney(r.acqcst), formatMoney(r.accdep), formatMoney(r.bvalue), r.usercd,
+                        r.lastname, r.firstname, r.middlename,
+                        Object.keys(customValues).map(function(k){ return customValues[k] == null ? '' : String(customValues[k]); }).join(' '),
+                        (latestUpdateForRow ? 'updated' : 'no change nochange unchanged')
+                    ].join(' '));
+
+                    var tdRec = td(String(i + 1), 'num');
+                    tdRec.setAttribute('data-system-col', 'recno');
+                    tr.appendChild(tdRec);
+
+                    for (var oi = 0; oi < columnOrder.length; oi++) {
+                        var tok = columnOrder[oi];
+                        if (!tok) continue;
+                        if (String(tok).indexOf('custom:') === 0) {
+                            var cid = String(tok).slice('custom:'.length);
+                            var val = customValues[cid] == null ? '' : String(customValues[cid]);
+                            var c = td(val);
+                            c.setAttribute('data-field', 'custom');
+                            c.setAttribute('data-custom-field-id', cid);
+                            c.setAttribute('data-col-type', customTypeById[cid] || 'text');
+                            if (customTypeById[cid] === 'number' || customTypeById[cid] === 'decimal') c.className = 'num';
+                            tr.appendChild(c);
+                        } else {
+                            var cls = '';
+                            if (tok === 'acqcst' || tok === 'accdep' || tok === 'bvalue') cls = 'num';
+                            if (tok === 'description') cls = 'desc';
+                            var value = r[tok];
+                            if (tok === 'acqcst' || tok === 'accdep' || tok === 'bvalue') value = formatMoney(value);
+                            if (tok === 'lastname' && !String(r.lastname || '').trim() && SHOW_NO_LAST_NAME_LABEL) value = NO_LAST_NAME_LABEL;
+                            var tdStd = td(value, cls);
+                            tdStd.setAttribute('data-field', tok);
+                            tr.appendChild(tdStd);
+                        }
+                    }
+
+                    var statusTd = document.createElement('td');
+                    if (latestUpdateForRow) {
+                        var btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'btn-link';
+                        btn.setAttribute('data-action', 'open-record-audit');
+                        btn.setAttribute('data-id', String(r.id));
+                        btn.setAttribute('data-label', recordLabelFromRecord(r));
+                        var badge = document.createElement('span');
+                        badge.className = 'badge status status-updated';
+                        badge.textContent = 'Updated';
+                        btn.appendChild(badge);
+                        statusTd.appendChild(btn);
+                    } else {
+                        var btn2 = document.createElement('button');
+                        btn2.type = 'button';
+                        btn2.className = 'btn-link';
+                        btn2.setAttribute('data-action', 'open-record-audit');
+                        btn2.setAttribute('data-id', String(r.id));
+                        btn2.setAttribute('data-label', recordLabelFromRecord(r));
+                        var badge2 = document.createElement('span');
+                        badge2.className = 'badge status status-nochange';
+                        badge2.textContent = 'No Change';
+                        btn2.appendChild(badge2);
+                        statusTd.appendChild(btn2);
+                    }
+                    tr.appendChild(statusTd);
+
+                    var actionTd = document.createElement('td');
+                    actionTd.className = 'row-actions';
+                    var editLink = document.createElement('a');
+                    editLink.className = 'btn btn-secondary btn-sm';
+                    editLink.textContent = 'Edit';
+                    editLink.href = 'add-record.html?id=' + encodeURIComponent(r.id) + '&sheet=' + encodeURIComponent(activeSheetIdForLinks);
+                    actionTd.appendChild(editLink);
+                    var delBtn = document.createElement('button');
+                    delBtn.type = 'button';
+                    delBtn.className = 'btn btn-danger btn-sm';
+                    delBtn.textContent = 'Delete';
+                    delBtn.setAttribute('data-action', 'delete');
+                    delBtn.setAttribute('data-id', r.id);
+                    actionTd.appendChild(delBtn);
+                    tr.appendChild(actionTd);
+
+                    tbody.appendChild(tr);
+                }
+
+                updateDeptFilterOptions(recordsForRender);
+                updateTotals(recordsForRender);
+                updateRecordTableColumnVisibility(recordsForRender);
+            }
+
+            // Inline editing + navigation
+            var gridSel = { row: -1, col: -1 };
+            var gridEditing = null; // { td, input, recordId, field, customId }
+
+            function editableCellsInRow(tr) {
+                var tds = tr ? tr.cells : [];
+                var list = [];
+                for (var i = 0; i < tds.length; i++) {
+                    var td = tds[i];
+                    if (!td) continue;
+                    if (td.getAttribute('data-system-col')) continue; // REC#
+                    if (td.parentElement && td.parentElement.querySelector('.row-actions') && td.classList.contains('row-actions')) continue;
+                    if (td.getAttribute('data-action')) continue;
+                    // Editable iff it has a data-field attribute
+                    if (td.getAttribute('data-field')) list.push(td);
+                }
+                return list;
+            }
+
+            function clearSelection() {
+                var prev = table.querySelector('td[data-selected="1"]');
+                if (prev) prev.removeAttribute('data-selected');
+                gridSel.row = -1; gridSel.col = -1;
+            }
+
+            function selectCellByTd(td) {
+                clearSelection();
+                if (!td) return;
+                td.setAttribute('data-selected', '1');
+                var tr = td.parentElement;
+                var rowIndex = Array.prototype.indexOf.call(tbody.rows, tr);
+                var cells = editableCellsInRow(tr);
+                var colIndex = Array.prototype.indexOf.call(cells, td);
+                gridSel.row = rowIndex; gridSel.col = colIndex;
+                if (tbody && tbody.focus) tbody.focus();
+            }
+
+            function selectCell(row, col) {
+                var tr = tbody && tbody.rows ? tbody.rows[row] : null;
+                if (!tr) return clearSelection();
+                var cells = editableCellsInRow(tr);
+                if (!cells.length) return clearSelection();
+                if (col < 0) col = 0;
+                if (col >= cells.length) col = cells.length - 1;
+                var td = cells[col];
+                if (!td) return clearSelection();
+                selectCellByTd(td);
+                td.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }
+
+            function cellMeta(td) {
+                var field = td.getAttribute('data-field') || '';
+                if (!field) return { kind: 'none' };
+                if (field === 'custom') {
+                    return { kind: 'custom', field: 'custom', customId: String(td.getAttribute('data-custom-field-id') || ''), colType: String(td.getAttribute('data-col-type') || 'text') };
+                }
+                return { kind: 'standard', field: field };
+            }
+
+            function recordById(id) {
+                var wb = readWorkbook();
+                var sid = String(wb.activeSheetId || '');
+                var list = (wb.recordsBySheet && wb.recordsBySheet[sid]) ? wb.recordsBySheet[sid] : [];
+                for (var i = 0; i < list.length; i++) if (String(list[i].id || '') === String(id)) return { wb: wb, sid: sid, idx: i, rec: list[i] };
+                return { wb: wb, sid: sid, idx: -1, rec: null };
+            }
+
+            function startEdit(td) {
+                if (!td || gridEditing) return;
+                var meta = cellMeta(td);
+                if (meta.kind === 'none') return;
+                var tr = td.parentElement;
+                var recordId = tr.getAttribute('data-record-id') || '';
+                var recCtx = recordById(recordId);
+                if (!recCtx.rec) return;
+
+                var initial = '';
+                if (meta.kind === 'standard') {
+                    initial = recCtx.rec[meta.field] == null ? '' : String(recCtx.rec[meta.field]);
+                } else if (meta.kind === 'custom') {
+                    initial = (recCtx.rec.custom && recCtx.rec.custom[meta.customId] != null) ? String(recCtx.rec.custom[meta.customId]) : '';
+                }
+                // show raw numbers for numeric fields
+                if (meta.kind === 'standard' && (meta.field === 'acqcst' || meta.field === 'accdep' || meta.field === 'bvalue')) {
+                    initial = recCtx.rec[meta.field] == null ? '' : String(recCtx.rec[meta.field]);
+                }
+
+                var inp = document.createElement('input');
+                inp.type = 'text';
+                inp.className = 'cell-editor';
+                inp.value = initial;
+                td.setAttribute('data-editing', '1');
+                while (td.firstChild) td.removeChild(td.firstChild);
+                td.appendChild(inp);
+                inp.focus();
+                inp.select();
+
+                gridEditing = { td: td, input: inp, recordId: recordId, meta: meta, committing: false };
+
+                inp.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') { e.preventDefault(); commitEdit(true); }
+                    else if (e.key === 'Escape') { e.preventDefault(); commitEdit(false); }
+                });
+                inp.addEventListener('blur', function () { commitEdit(true); });
+            }
+
+            function normalizeForMeta(meta, raw) {
+                var val = String(raw == null ? '' : raw).trim();
+                if (meta.kind === 'standard') {
+                    if (meta.field === 'acqdte') return normalizeDate(val);
+                    if (meta.field === 'acqcst' || meta.field === 'accdep' || meta.field === 'bvalue') return normalizeNumber(val);
+                    return val;
+                }
+                if (meta.kind === 'custom') {
+                    if (meta.colType === 'date') return normalizeDate(val);
+                    if (meta.colType === 'number' || meta.colType === 'decimal') return normalizeNumber(val);
+                    return val;
+                }
+                return val;
+            }
+
+            function commitEdit(save) {
+                var st = gridEditing;
+                if (!st) return;
+                if (st.committing) return;
+                st.committing = true;
+                var td = st.td; var inp = st.input; var meta = st.meta; var recordId = st.recordId;
+                var newRaw = inp.value;
+                var newVal = save ? normalizeForMeta(meta, newRaw) : null;
+
+                // restore cell
+                td.removeAttribute('data-editing');
+                td.innerHTML = '';
+                var display = save ? newVal : (td.getAttribute('data-field') && (td.getAttribute('data-field') === 'acqcst' || td.getAttribute('data-field') === 'accdep' || td.getAttribute('data-field') === 'bvalue') ? td.textContent : td.textContent);
+                td.textContent = display == null ? '' : String(display);
+
+                gridEditing = null;
+
+                if (!save) return;
+
+                var changed = applyCellChange(recordId, meta, newVal);
+                if (changed) {
+                    var recs = currentRecords();
+                    renderRecords(recs);
+                    applyFilter(search.value);
+                } else {
+                    // reformat numbers
+                    if (meta.kind === 'standard' && (meta.field === 'acqcst' || meta.field === 'accdep' || meta.field === 'bvalue')) {
+                        td.textContent = formatMoney(newVal);
+                    }
+                }
+            }
+
+            function applyCellChange(recordId, meta, value) {
+                var ctx = recordById(recordId);
+                if (!ctx.rec) return false;
+
+                var before = {
+                    acqcst: ctx.rec.acqcst,
+                    accdep: ctx.rec.accdep,
+                    bvalue: ctx.rec.bvalue
+                };
+
+                var oldVal = '';
+                if (meta.kind === 'standard') {
+                    oldVal = ctx.rec[meta.field] == null ? '' : String(ctx.rec[meta.field]);
+                    ctx.rec[meta.field] = value;
+                } else if (meta.kind === 'custom') {
+                    if (!ctx.rec.custom || typeof ctx.rec.custom !== 'object') ctx.rec.custom = {};
+                    oldVal = ctx.rec.custom[meta.customId] == null ? '' : String(ctx.rec.custom[meta.customId]);
+                    ctx.rec.custom[meta.customId] = value;
+                } else {
+                    return false;
+                }
+
+                // Optional auto-calc BVALUE when empty
+                var autoCalcChange = null;
+                var a = toNumber(ctx.rec.acqcst);
+                var d = toNumber(ctx.rec.accdep);
+                if ((meta.field === 'acqcst' || meta.field === 'accdep') && (ctx.rec.bvalue == null || String(ctx.rec.bvalue).trim() === '')) {
+                    var calc = String((a - d).toFixed(2));
+                    ctx.rec.bvalue = calc;
+                    autoCalcChange = { field: 'bvalue', oldValue: before.bvalue == null ? '' : String(before.bvalue), newValue: calc };
+                }
+
+                var wb = ctx.wb;
+                touchSheetUpdatedAt(wb, ctx.sid);
+                writeWorkbook(wb);
+
+                var changeList = [{ field: (meta.kind === 'custom' ? ('custom:' + meta.customId) : meta.field), oldValue: oldVal, newValue: value }];
+                if (autoCalcChange) changeList.push(autoCalcChange);
+
+                appendAudit({
+                    action: 'update',
+                    module: 'records',
+                    user: user,
+                    tsIso: new Date().toISOString(),
+                    recordId: String(recordId),
+                    recordLabel: recordLabelFromRecord(ctx.rec),
+                    details: 'Inline edit',
+                    changes: changeList
+                });
+
+                return true;
+            }
+
+            if (tbody) {
+                try { tbody.setAttribute('tabindex', '0'); } catch (e) {}
+                tbody.addEventListener('click', function (e) {
+                    var td = e.target && e.target.closest('td');
+                    if (!td || !tbody.contains(td)) return;
+                    if (!td.getAttribute('data-field')) return; // non-editable area
+                    selectCellByTd(td);
+                });
+                tbody.addEventListener('dblclick', function (e) {
+                    var td = e.target && e.target.closest('td');
+                    if (!td || !tbody.contains(td)) return;
+                    if (!td.getAttribute('data-field')) return;
+                    startEdit(td);
+                });
+
+                function parseClipboard(text) {
+                    var s = String(text || '');
+                    // Prefer TSV; fallback to CSV
+                    var rows = s.indexOf('\t') !== -1 ? s.split(/\r?\n/) : s.split(/\r?\n/);
+                    var out = [];
+                    for (var i = 0; i < rows.length; i++) {
+                        var line = rows[i];
+                        if (!line && i === rows.length - 1) continue;
+                        var cells;
+                        if (s.indexOf('\t') !== -1) cells = line.split('\t'); else cells = line.split(',');
+                        out.push(cells);
+                    }
+                    // Trim trailing blank-only rows
+                    while (out.length && out[out.length - 1].every(function (c) { return String(c || '').trim() === ''; })) out.pop();
+                    return out;
+                }
+
+                tbody.addEventListener('paste', function (e) {
+                    if (gridEditing) return; // let input handle paste
+                    if (!gridSel || gridSel.row < 0 || gridSel.col < 0) return;
+                    var data = (e.clipboardData || window.clipboardData);
+                    if (!data) return;
+                    var text = data.getData('text');
+                    if (!text) return;
+                    e.preventDefault();
+
+                    var matrix = parseClipboard(text);
+                    if (!matrix.length) return;
+
+                    var totalApplied = 0;
+                    var startRow = gridSel.row;
+                    var startCol = gridSel.col;
+
+                    for (var rOff = 0; rOff < matrix.length; rOff++) {
+                        var tr = tbody.rows[startRow + rOff];
+                        if (!tr) break;
+                        var cells = editableCellsInRow(tr);
+                        if (!cells.length) continue;
+                        var rowVals = matrix[rOff] || [];
+                        for (var cOff = 0; cOff < rowVals.length; cOff++) {
+                            var td = cells[startCol + cOff];
+                            if (!td) break;
+                            var meta = cellMeta(td);
+                            if (meta.kind === 'none') continue;
+
+                            var raw = rowVals[cOff];
+                            var norm = normalizeForMeta(meta, raw);
+                            var recId = tr.getAttribute('data-record-id') || '';
+                            var changed = applyCellChange(recId, meta, norm);
+                            if (changed) totalApplied++;
+                        }
+                    }
+
+                    var recs = currentRecords();
+                    renderRecords(recs);
+                    applyFilter(search.value);
+                    if (totalApplied) showToast('Pasted ' + String(totalApplied) + ' cell(s).');
+                });
+            }
+
+            document.addEventListener('keydown', function (e) {
+                if (!tbody || !tableWrap || tableWrap.style.display === 'none') return;
+                // If editing, only handle Enter/Esc in the input listeners
+                if (gridEditing) return;
+                if (gridSel.row < 0 || gridSel.col < 0) return;
+
+                var handled = false;
+                var row = gridSel.row, col = gridSel.col;
+                if (e.key === 'Enter') { handled = true; var tr = tbody.rows[row]; if (tr) { var cells = editableCellsInRow(tr); if (cells[col]) startEdit(cells[col]); } }
+                else if (e.key === 'ArrowRight' || (e.key === 'Tab' && !e.shiftKey)) { handled = true; col++; }
+                else if (e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey)) { handled = true; col--; }
+                else if (e.key === 'ArrowDown') { handled = true; row++; }
+                else if (e.key === 'ArrowUp') { handled = true; row--; }
+
+                if (handled) {
+                    e.preventDefault();
+                    if (row < 0) row = 0;
+                    if (row >= tbody.rows.length) row = tbody.rows.length - 1;
+                    selectCell(row, col);
+                }
+            });
+
+            function updateDeptFilterOptions(records) {
+                var selected = deptFilter.value || '';
+                var seen = {};
+                var options = [{ value: '', label: 'All DEPT/BRANCH' }];
+
+                for (var i = 0; i < records.length; i++) {
+                    var v = String(records[i].deptbranch || '').trim();
+                    if (!v) continue;
+                    var k = normalize(v);
+                    if (seen[k]) continue;
+                    seen[k] = true;
+                    options.push({ value: v, label: v });
+                }
+
+                options.sort(function (a, b) {
+                    if (a.value === '') return -1;
+                    if (b.value === '') return 1;
+                    return a.label.localeCompare(b.label);
+                });
+
+                deptFilter.innerHTML = '';
+                for (var j = 0; j < options.length; j++) {
+                    var opt = document.createElement('option');
+                    opt.value = options[j].value;
+                    opt.textContent = options[j].label;
+                    deptFilter.appendChild(opt);
+                }
+
+                deptFilter.value = selected;
+            }
+
+            function renderPagination(totalMatches) {
+                var totalPages = Math.max(1, Math.ceil(totalMatches / PAGE_SIZE));
+                if (currentPage > totalPages) currentPage = totalPages;
+
+                if (totalMatches <= PAGE_SIZE) {
+                    pagination.style.display = 'none';
+                    pagination.innerHTML = '';
+                    return;
+                }
+
+                pagination.style.display = 'flex';
+                pagination.innerHTML = '';
+                pagination.setAttribute('data-total-pages', String(totalPages));
+
+                var backBtn = document.createElement('button');
+                backBtn.type = 'button';
+                backBtn.className = 'btn btn-secondary btn-sm';
+                backBtn.textContent = 'Back';
+                backBtn.setAttribute('data-action', 'back');
+                if (currentPage <= 1) backBtn.disabled = true;
+                pagination.appendChild(backBtn);
+
+                var WINDOW_SIZE = PAGE_WINDOW_SIZE;
+                var startPage = currentPage;
+                var maxStart = Math.max(1, totalPages - WINDOW_SIZE + 1);
+                if (startPage > maxStart) startPage = maxStart;
+                var endPage = Math.min(totalPages, startPage + WINDOW_SIZE - 1);
+
+                for (var p = startPage; p <= endPage; p++) {
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn btn-secondary btn-sm' + (p === currentPage ? ' is-active' : '');
+                    btn.textContent = String(p);
+                    btn.setAttribute('data-page', String(p));
+                    pagination.appendChild(btn);
+                }
+
+                if (endPage < totalPages) {
+                    var dots = document.createElement('button');
+                    dots.type = 'button';
+                    dots.className = 'btn btn-secondary btn-sm';
+                    dots.textContent = '...';
+                    dots.disabled = true;
+                    pagination.appendChild(dots);
+                }
+
+                var nextBtn = document.createElement('button');
+                nextBtn.type = 'button';
+                nextBtn.className = 'btn btn-secondary btn-sm';
+                nextBtn.textContent = 'Next';
+                nextBtn.setAttribute('data-action', 'next');
+                if (currentPage >= totalPages) nextBtn.disabled = true;
+                pagination.appendChild(nextBtn);
+            }
+
+            function currentRecords() {
+                var wb = readWorkbook();
+                var sid = arguments.length ? String(arguments[0] || '') : String(wb.activeSheetId || '');
+                var list = (wb.recordsBySheet && wb.recordsBySheet[sid]) ? wb.recordsBySheet[sid] : [];
+                return Array.isArray(list) ? list : [];
+            }
+
+            function getImportTargetSheetId() {
+                var wb = readWorkbook();
+                var sid = importTargetSheet ? String(importTargetSheet.value || '') : '';
+                if (sid && sheetById(wb, sid)) return sid;
+                return String(wb.activeSheetId || '');
+            }
+
+            function applyFilter(query) {
+                var parsed = parseStatusSearch(query == null ? search.value : query);
+                var tokens = parsed.tokens;
+                var statusFilter = parsed.status;
+                var dept = normalize(deptFilter.value);
+                var cost = (costFilter && costFilter.value) ? String(costFilter.value) : '';
+                var rows = table.tBodies[0].rows;
+                var matches = [];
+
+                var sumAcqcst = 0;
+                var sumAccdep = 0;
+                var sumBvalue = 0;
+
+                for (var i = 0; i < rows.length; i++) {
+                    var rowText = rows[i].dataset.search || '';
+                    var matchesText = true;
+                    if (tokens.length) {
+                        for (var t = 0; t < tokens.length; t++) {
+                            if (!tokens[t]) continue;
+                            if (rowText.indexOf(tokens[t]) === -1) {
+                                matchesText = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    var matchesStatus = !statusFilter || String(rows[i].dataset.status || '') === statusFilter;
+                    var matchesDept = !dept || normalize(rows[i].dataset.deptbranch || '') === dept;
+                    var matchesCost = !cost || String(rows[i].dataset.costbucket || '') === cost;
+
+                    var isMatch = matchesText && matchesStatus && matchesDept && matchesCost;
+                    if (isMatch) {
+                        matches.push(rows[i]);
+                        sumAcqcst += toNumber(rows[i].dataset.acqcst || '');
+                        sumAccdep += toNumber(rows[i].dataset.accdep || '');
+                        sumBvalue += toNumber(rows[i].dataset.bvalue || '');
+                    }
+                    rows[i].style.display = 'none';
+                }
+
+                updateTotalsFromNumbers(sumAcqcst, sumAccdep, sumBvalue, matches.length);
+
+                renderPagination(matches.length);
+
+                var start = (currentPage - 1) * PAGE_SIZE;
+                var end = start + PAGE_SIZE;
+                var pageVisible = 0;
+
+                for (var j = start; j < end && j < matches.length; j++) {
+                    matches[j].style.display = '';
+                    pageVisible++;
+                }
+
+                if (tableWrap.style.display === 'none') {
+                    noMatchState.style.display = 'none';
+                    return;
+                }
+
+                noMatchState.style.display = matches.length ? 'none' : 'block';
+                if (!matches.length) {
+                    pagination.style.display = 'none';
+                    pagination.innerHTML = '';
+                }
+            }
+
+            search.addEventListener('input', function (e) {
+                currentPage = 1;
+                applyFilter(e.target.value);
+            });
+
+            deptFilter.addEventListener('change', function () {
+                currentPage = 1;
+                applyFilter();
+            });
+
+            if (costFilter) {
+                costFilter.addEventListener('change', function () {
+                    currentPage = 1;
+                    applyFilter();
+                });
+            }
+
+            resetFiltersBtn.addEventListener('click', function () {
+                search.value = '';
+                deptFilter.value = '';
+                if (costFilter) costFilter.value = '';
+                currentPage = 1;
+                applyFilter('');
+            });
+
+            if (sheetTabs) {
+                sheetTabs.addEventListener('click', function (e) {
+                    var t = e.target;
+                    if (!t) return;
+                    if (!t.matches('button[data-sheet-id]')) return;
+                    var sid = t.getAttribute('data-sheet-id');
+                    setActiveSheetId(sid, { pushUrl: true });
+                    renderSheetTabs();
+                    var recs = currentRecords();
+                    renderRecords(recs);
+                    currentPage = 1;
+                    applyFilter(search.value);
+                });
+            }
+
+            function nextDefaultSheetName(wb) {
+                var n = (wb && wb.sheets ? wb.sheets.length : 0) + 1;
+                return 'Sheet ' + String(n);
+            }
+
+            if (addSheetBtn) {
+                addSheetBtn.addEventListener('click', function () {
+                    var wb = readWorkbook();
+                    var name = prompt('Sheet name:', nextDefaultSheetName(wb));
+                    if (name == null) return;
+                    name = String(name || '').trim();
+                    if (!name) return;
+                    var sid = newId('sheet');
+                    var now = new Date().toISOString();
+                    wb.sheets.push({ id: sid, name: name, createdAt: now, updatedAt: now });
+                    wb.recordsBySheet[sid] = [];
+                    wb.activeSheetId = sid;
+                    writeWorkbook(wb);
+
+                    appendAudit({
+                        action: 'create',
+                        module: 'sheets',
+                        user: user,
+                        tsIso: now,
+                        details: 'Created sheet: ' + name
+                    });
+
+                    renderSheetTabs();
+                    renderRecords([]);
+                    currentPage = 1;
+                    applyFilter(search.value);
+                });
+            }
+
+            if (renameSheetBtn) {
+                renameSheetBtn.addEventListener('click', function () {
+                    var wb = readWorkbook();
+                    var s = sheetById(wb, wb.activeSheetId);
+                    if (!s) return;
+                    var before = String(s.name || '');
+                    var name = prompt('Rename sheet:', before);
+                    if (name == null) return;
+                    name = String(name || '').trim();
+                    if (!name) return;
+                    s.name = name;
+                    touchSheetUpdatedAt(wb, s.id);
+                    writeWorkbook(wb);
+
+                    appendAudit({
+                        action: 'rename',
+                        module: 'sheets',
+                        user: user,
+                        tsIso: new Date().toISOString(),
+                        details: 'Renamed sheet: ' + before + ' -> ' + name
+                    });
+
+                    renderSheetTabs();
+                });
+            }
+
+            if (duplicateSheetBtn) {
+                duplicateSheetBtn.addEventListener('click', function () {
+                    var wb = readWorkbook();
+                    var s = sheetById(wb, wb.activeSheetId);
+                    if (!s) return;
+                    var name = prompt('Duplicate sheet name:', String(s.name || '') + ' Copy');
+                    if (name == null) return;
+                    name = String(name || '').trim();
+                    if (!name) return;
+                    var sid = newId('sheet');
+                    var now = new Date().toISOString();
+                    wb.sheets.push({ id: sid, name: name, createdAt: now, updatedAt: now });
+                    var src = wb.recordsBySheet[s.id] || [];
+                    wb.recordsBySheet[sid] = sanitizeRecords(src);
+                    wb.activeSheetId = sid;
+                    writeWorkbook(wb);
+
+                    appendAudit({
+                        action: 'duplicate',
+                        module: 'sheets',
+                        user: user,
+                        tsIso: now,
+                        details: 'Duplicated sheet: ' + String(s.name || '') + ' -> ' + name + ' | Records: ' + String((src || []).length)
+                    });
+
+                    renderSheetTabs();
+                    renderRecords(currentRecords());
+                    currentPage = 1;
+                    applyFilter(search.value);
+                });
+            }
+
+            if (deleteSheetBtn) {
+                deleteSheetBtn.addEventListener('click', function () {
+                    var wb = readWorkbook();
+                    if (!wb.sheets || wb.sheets.length <= 1) {
+                        alert('Cannot delete the last sheet.');
+                        return;
+                    }
+                    var s = sheetById(wb, wb.activeSheetId);
+                    if (!s) return;
+                    if (!confirm('Delete sheet "' + String(s.name || '') + '"? This will remove its records.')) return;
+
+                    var removedName = String(s.name || '');
+                    var removedId = String(s.id || '');
+                    var removedCount = (wb.recordsBySheet && wb.recordsBySheet[removedId]) ? wb.recordsBySheet[removedId].length : 0;
+
+                    var nextSheets = [];
+                    for (var i = 0; i < wb.sheets.length; i++) {
+                        if (String(wb.sheets[i] && wb.sheets[i].id || '') !== removedId) nextSheets.push(wb.sheets[i]);
+                    }
+                    wb.sheets = nextSheets;
+                    if (wb.recordsBySheet) delete wb.recordsBySheet[removedId];
+                    wb.activeSheetId = String(wb.sheets[0].id || '');
+                    writeWorkbook(wb);
+
+                    appendAudit({
+                        action: 'delete',
+                        module: 'sheets',
+                        user: user,
+                        tsIso: new Date().toISOString(),
+                        details: 'Deleted sheet: ' + removedName + ' | Records: ' + String(removedCount)
+                    });
+
+                    renderSheetTabs();
+                    renderRecords(currentRecords());
+                    currentPage = 1;
+                    applyFilter(search.value);
+                });
+            }
+
+            if (parseImportBtn) {
+                parseImportBtn.addEventListener('click', function () {
+                    setImportHint('');
+                    if (!importFile || !importFile.files || !importFile.files[0]) {
+                        setImportHint('Please select a spreadsheet file (.xlsx/.ods/.xls).');
+                        return;
+                    }
+
+                    if (!(window.XLSX && XLSX.read)) {
+                        setImportHint('Excel import library not loaded. Please check your internet connection.');
+                        return;
+                    }
+
+                    var file = importFile.files[0];
+                    importState.sourceFileName = file && file.name ? String(file.name) : '';
+                    var reader = new FileReader();
+                    reader.onload = function (evt) {
+                        try {
+                            var data = evt.target.result;
+                            var wb = XLSX.read(data, { type: 'array', cellDates: true });
+                            var sheetName = wb.SheetNames && wb.SheetNames.length ? wb.SheetNames[0] : null;
+                            if (!sheetName) {
+                                setImportHint('No sheets found in workbook.');
+                                return;
+                            }
+                            var ws = wb.Sheets[sheetName];
+                            var aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+                            if (!aoa || aoa.length < 2) {
+                                setImportHint('No data rows found.');
+                                return;
+                            }
+
+                            // Detect the first likely header row (skip title/metadata rows)
+                            function buildKnownHeaderSet() {
+                                var list = [];
+                                function addAll(arr) { for (var i = 0; i < arr.length; i++) list.push(arr[i]); }
+                                addAll(['deptcd', 'dept', 'departmentcode']);
+                                addAll(['dept/branch', 'deptbranch', 'departmentbranch', 'branch']);
+                                addAll(['tmnum', 'tm', 'transactionnumber', 'transactionno']);
+                                addAll(['description', 'desc', 'itemdescription', 'article/item', 'article item', 'article', 'item', 'item name', 'article name', 'particulars', 'asset description', 'asset/item', 'asset item']);
+                                addAll(['sernum', 'serialnumber', 'serial']);
+                                addAll(['oldppronum', 'oldpprono', 'oldpronum', 'oldpo', 'old property number assigned', 'old property number', 'old property no']);
+                                addAll(['pronum', 'pro', 'po', 'purchaseordernumber', 'purchaseorder', 'new property number assigned', 'new property number', 'new property no']);
+                                addAll(['acqdte', 'acquisitiondate', 'dateacquired']);
+                                addAll(['acqcst', 'acquisitioncost', 'cost', 'unit value', 'unitvalue', 'unit price', 'unitprice', 'price per unit', 'amount per unit', 'value per unit']);
+                                addAll(['accdep', 'accountdeposit', 'deposit']);
+                                addAll(['bvalue', 'bookvalue']);
+                                addAll(['usercd', 'usercode']);
+                                addAll(['lastname', 'last', 'surname']);
+                                addAll(['firstname', 'first', 'givenname']);
+                                addAll(['middlename', 'middle', 'mi']);
+                                // Common non-standard headers seen in supplied ODS sheets
+                                addAll(['mat code', 'matcode', 'material code']);
+                                addAll(['material description', 'materialdescription']);
+                                addAll(['b. uom', 'buom', 'uom', 'unit of measure']);
+                                var set = {};
+                                for (var i2 = 0; i2 < list.length; i2++) set[normalizeHeader(list[i2])] = true;
+                                return set;
+                            }
+
+                            function scoreHeaderRow(row, known) {
+                                if (!row || !row.length) return 0;
+                                var matches = 0;
+                                var nonEmpty = 0;
+                                var monthHits = 0;
+                                var wordHits = 0;
+                                var monthRe = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i;
+                                for (var i = 0; i < row.length; i++) {
+                                    var t = String(row[i] == null ? '' : row[i]).trim();
+                                    if (!t) continue;
+                                    nonEmpty++;
+                                    var n = normalizeHeader(t);
+                                    if (known[n]) matches++;
+                                    if (monthRe.test(t)) monthHits++;
+                                    if (/\b(code|description|uom|material|mat)\b/i.test(t)) wordHits++;
+                                }
+                                // prefer rows with known fields and month labels
+                                return matches * 12 + monthHits * 6 + wordHits * 2 + Math.min(nonEmpty, 8);
+                            }
+
+                            var knownHeaders = buildKnownHeaderSet();
+                            var searchLimit = Math.min(30, aoa.length);
+                            var headerIdx = 0;
+                            var bestScore = -1;
+                            for (var r0 = 0; r0 < searchLimit; r0++) {
+                                var row0 = aoa[r0] || [];
+                                var any = false;
+                                for (var c0 = 0; c0 < row0.length; c0++) { if (String(row0[c0] == null ? '' : row0[c0]).trim()) { any = true; break; } }
+                                if (!any) continue;
+                                var sc = scoreHeaderRow(row0, knownHeaders);
+                                if (sc > bestScore) { bestScore = sc; headerIdx = r0; }
+                                // early stop if excellent match
+                                if (sc >= 25) break;
+                            }
+
+                            // If nothing reasonable matched, fallback to first non-empty row
+                            if (bestScore <= 0) {
+                                for (var r1 = 0; r1 < searchLimit; r1++) {
+                                    var row1 = aoa[r1] || [];
+                                    var any1 = false;
+                                    for (var c1 = 0; c1 < row1.length; c1++) { if (String(row1[c1] == null ? '' : row1[c1]).trim()) { any1 = true; break; } }
+                                    if (any1) { headerIdx = r1; break; }
+                                }
+                            }
+
+                            function lastNonEmptyColIndex(row) {
+                                if (!row || !row.length) return -1;
+                                for (var i = row.length - 1; i >= 0; i--) {
+                                    if (String(row[i] == null ? '' : row[i]).trim() !== '') return i;
+                                }
+                                return -1;
+                            }
+
+                            // Merge two-row headers when present (e.g., month parent on row1 and subheaders on row2)
+                            var headerRow1 = aoa[headerIdx] || [];
+                            var headerRow2 = aoa[headerIdx + 1] || [];
+
+                            function lastNonEmptyColIndexDual(rowA, rowB) {
+                                var last = -1;
+                                var len = Math.max(rowA ? rowA.length : 0, rowB ? rowB.length : 0);
+                                for (var i = 0; i < len; i++) {
+                                    var a = String(rowA && rowA[i] != null ? rowA[i] : '').trim();
+                                    var b = String(rowB && rowB[i] != null ? rowB[i] : '').trim();
+                                    if (a || b) last = i;
+                                }
+                                return last;
+                            }
+
+                            function countMonthLike(row) {
+                                if (!row) return 0;
+                                var count = 0;
+                                var re = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i;
+                                for (var i = 0; i < row.length; i++) {
+                                    var t = String(row[i] == null ? '' : row[i]).trim();
+                                    if (re.test(t)) count++;
+                                }
+                                return count;
+                            }
+                            function countSubHeaderLike(row) {
+                                if (!row) return 0;
+                                var count = 0;
+                                var re = /(requisition|consumption|stock\s*on\s*hand|beginning\s*stock|ending\s*stock)/i;
+                                for (var i = 0; i < row.length; i++) {
+                                    var t = String(row[i] == null ? '' : row[i]).trim();
+                                    if (re.test(t)) count++;
+                                }
+                                return count;
+                            }
+                            function simplifySubLabel(s) {
+                                var t = String(s == null ? '' : s).trim();
+                                if (!t) return '';
+                                t = t.replace(/\s+/g, ' ');
+                                return t;
+                            }
+
+                            var m1 = countMonthLike(headerRow1);
+                            var m2 = countMonthLike(headerRow2);
+                            var s1 = countSubHeaderLike(headerRow1);
+                            var s2 = countSubHeaderLike(headerRow2);
+                            // Use composite headers when one row has months and the other has subheaders
+                            var compositeTwoRow = (m1 >= 2 && s2 >= 2) || (m2 >= 2 && s1 >= 2);
+                            var monthsOnRow1 = m1 >= m2; // tie goes to row1
+                            var headerRowsUsed = compositeTwoRow ? 2 : 1;
+
+                            var headerColCount = compositeTwoRow
+                                ? Math.max(0, lastNonEmptyColIndexDual(headerRow1, headerRow2) + 1)
+                                : Math.max(0, lastNonEmptyColIndex(headerRow1) + 1);
+                            var maxColCount = headerColCount;
+                            // Detect if there is a third header helper row (letters/formulas like a,b,c or g=(d+e)-f)
+                            var headerRow3 = aoa[headerIdx + 2] || [];
+                            function isGuideRow(row) {
+                                if (!row || !row.length) return false;
+                                var hits = 0, nonEmpty = 0;
+                                for (var i = 0; i < row.length; i++) {
+                                    var t = String(row[i] == null ? '' : row[i]).trim();
+                                    if (!t) continue;
+                                    nonEmpty++;
+                                    if (/^([a-z]{1,3}|[a-z]{1,3}\s*=[^]*|[^]*=[^]*|[^]*\([^)]*\)[^]*)$/i.test(t)) hits++;
+                                }
+                                return nonEmpty > 0 && hits >= Math.max(3, Math.floor(nonEmpty * 0.5));
+                            }
+                            if (isGuideRow(headerRow3)) {
+                                headerRowsUsed = Math.max(headerRowsUsed, 3);
+                            }
+
+                            var cleanedHeaders = [];
+                            var lastMonth = '';
+                            function isMonthLikeLabel(s) {
+                                return /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{4}\b/i.test(String(s || '').trim());
+                            }
+                            function isNonMonthStandaloneLabel(s) {
+                                var t = String(s || '').trim().toLowerCase();
+                                return t === 'mat code' || t === 'matcode' || t === 'material code' ||
+                                       t === 'material description' || t === 'b. uom' || t === 'uom' || t === 'unit of measure';
+                            }
+                            // headerRow3 already read above
+                            var monthByIndex = {};
+                            for (var mi = 0; mi < headerColCount; mi++) {
+                                var m1c = String(headerRow1[mi] == null ? '' : headerRow1[mi]).trim();
+                                var m2c = String(headerRow2[mi] == null ? '' : headerRow2[mi]).trim();
+                                var m3c = String(headerRow3[mi] == null ? '' : headerRow3[mi]).trim();
+                                var mm = '';
+                                if (isMonthLikeLabel(m1c)) mm = m1c; else if (isMonthLikeLabel(m2c)) mm = m2c; else if (isMonthLikeLabel(m3c)) mm = m3c;
+                                if (mm) monthByIndex[mi] = mm;
+                            }
+                            for (var i = 0; i < headerColCount; i++) {
+                                var c1 = String(headerRow1[i] == null ? '' : headerRow1[i]).trim();
+                                var c2 = String(headerRow2[i] == null ? '' : headerRow2[i]).trim();
+                                var c3 = String(headerRow3[i] == null ? '' : headerRow3[i]).trim();
+                                var month = '';
+                                var sub = '';
+                                if (isMonthLikeLabel(c1)) month = c1; else if (isMonthLikeLabel(c2)) month = c2; else if (isMonthLikeLabel(c3)) month = c3;
+                                // pick first non-month non-empty as sub
+                                var cand = c1; if (!cand || isMonthLikeLabel(cand)) cand = c2; if (!cand || isMonthLikeLabel(cand)) cand = c3;
+                                sub = simplifySubLabel(cand);
+                                if (!month && sub && !isNonMonthStandaloneLabel(sub)) {
+                                    var future = '';
+                                    for (var look = i; look <= Math.min(headerColCount - 1, i + 3); look++) {
+                                        if (monthByIndex[look]) { future = monthByIndex[look]; break; }
+                                    }
+                                    if (future) month = future; else if (lastMonth) month = lastMonth;
+                                }
+                                // avoid attaching months to non-month standalone columns
+                                if (isNonMonthStandaloneLabel(sub)) month = '';
+                                var lbl = '';
+                                if (month) { lbl = sub ? (month + ' - ' + sub) : month; lastMonth = month; }
+                                else { lbl = sub || month || ('Column ' + String(i + 1)); if (isMonthLikeLabel(lbl)) lastMonth = lbl; }
+                                cleanedHeaders.push((lbl && lbl.trim()) ? lbl : ('Column ' + String(i + 1)));
+                            }
+
+                            var rawRows = [];
+                            var dataStart = headerIdx + headerRowsUsed;
+                            for (var r = dataStart; r < aoa.length; r++) {
+                                var row = aoa[r] || [];
+                                var lastIdx = Math.min(headerColCount - 1, lastNonEmptyColIndex(row));
+                                if (lastIdx < 0) continue;
+                                maxColCount = Math.max(maxColCount, lastIdx + 1);
+                                rawRows.push(row);
+                            }
+
+                            if (maxColCount <= 0) {
+                                setImportHint('No data rows found.');
+                                return;
+                            }
+
+                            // Normalize rows to maxColCount
+                            var rows = [];
+                            for (var rr = 0; rr < rawRows.length; rr++) {
+                                var src = rawRows[rr] || [];
+                                var sliced = src.slice(0, maxColCount);
+                                while (sliced.length < maxColCount) sliced.push('');
+                                rows.push(sliced);
+                            }
+
+                            importState.headers = cleanedHeaders;
+                            importState.rows = rows;
+                            importState.mapping = defaultMapping(cleanedHeaders);
+                            // Ensure custom fields for unmapped headers are created early so mapping/preview reflect all columns
+                            try { ensureCustomFieldsForMapping(); } catch (e) {}
+
+                            if (importBody) importBody.style.display = 'block';
+                            renderImportMapping(cleanedHeaders);
+                            setImportHint('Loaded rows: ' + String(rows.length) + '. Review mapping then click Import.');
+
+                            readMappingFromUi();
+                            var stats = validateImport();
+                            var hint = 'Loaded rows: ' + String(stats.total) + ' | Ready to import: ' + String(stats.imported) + ' | Warnings: ' + String(stats.warnings);
+                            if (importState.unmappedLabels && importState.unmappedLabels.length) {
+                                hint += ' | Some fields were not mapped and will be skipped during import.';
+                            }
+                            if (importState.unmappedRequiredCustomLabels && importState.unmappedRequiredCustomLabels.length) {
+                                hint += ' | Required custom fields not mapped: ' + importState.unmappedRequiredCustomLabels.join(' / ');
+                            }
+                            setImportHint(hint);
+                            renderImportPreview(stats);
+                        } catch (e) {
+                            setImportHint('Failed to read file. ' + String((e && e.message) ? e.message : 'Please verify it is a valid .xlsx.'));
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                });
+            }
+
+            if (importTargetSheet) {
+                importTargetSheet.addEventListener('change', function () {
+                    try {
+                        if (!importBody || importBody.style.display === 'none') return;
+                        if (!importState || !importState.headers || !importState.headers.length) return;
+                        refreshImportMappingForTargetSheet();
+                    } catch (err) {
+                        setImportHint('Import mapping error: ' + String((err && err.message) ? err.message : err));
+                    }
+                });
+            }
+
+            if (importMapping) {
+                importMapping.addEventListener('change', function (e) {
+                    if (!e || !e.target) return;
+                    if (!e.target.matches('select[data-field]')) return;
+                    try {
+                        readMappingFromUi();
+                        var stats = validateImport();
+                        var hint = 'Loaded rows: ' + String(stats.total) + ' | Ready to import: ' + String(stats.imported) + ' | Warnings: ' + String(stats.warnings);
+                        if (importState.unmappedLabels && importState.unmappedLabels.length) {
+                            hint += ' | Some fields were not mapped and will be skipped during import.';
+                        }
+                        if (importState.unmappedRequiredCustomLabels && importState.unmappedRequiredCustomLabels.length) {
+                            hint += ' | Required custom fields not mapped: ' + importState.unmappedRequiredCustomLabels.join(' / ');
+                        }
+                        setImportHint(hint);
+                        renderImportPreview(stats);
+                    } catch (err) {
+                        setImportHint('Import mapping error: ' + String((err && err.message) ? err.message : err));
+                    }
+                });
+            }
+
+            if (importConfirmBtn) {
+                importConfirmBtn.addEventListener('click', function () {
+                    try {
+                        if (!importState.rows.length) return;
+
+                        readMappingFromUi();
+                        ensureCustomFieldsForMapping();
+                        var stats = validateImport();
+                        renderImportPreview(stats);
+                        if (stats && stats.blocked) {
+                            alert((importState.blockedReasons || []).join('\n') || 'Import blocked. Fix required custom fields.');
+                            return;
+                        }
+
+                        if (!importState.validRecords.length) {
+                            setImportHint('No valid records to import. Please review mapping and required fields.');
+                            return;
+                        }
+
+                        if (!confirm('Import ' + String(importState.validRecords.length) + ' record(s)? Rows with warnings will still be imported.')) return;
+                        doImport();
+                    } catch (err) {
+                        setImportHint('Import failed: ' + String((err && err.message) ? err.message : err));
+                    }
+                });
+            }
+
+            if (downloadImportReportBtn) {
+                downloadImportReportBtn.addEventListener('click', function () {
+                    downloadImportReport();
+                });
+            }
+
+            pagination.addEventListener('click', function (e) {
+                var target = e.target;
+                if (!target) return;
+                if (target.matches('button[data-page]')) {
+                    var p = Number(target.getAttribute('data-page'));
+                    if (!isFinite(p) || p < 1) return;
+                    currentPage = p;
+                    applyFilter();
+                    return;
+                }
+
+                if (target.matches('button[data-action="next"]')) {
+                    var totalPages = Number(pagination.getAttribute('data-total-pages'));
+                    if (!isFinite(totalPages) || totalPages < 1) totalPages = 1;
+                    if (currentPage >= totalPages) return;
+                    currentPage = currentPage + 1;
+                    applyFilter();
+                    return;
+                }
+
+                if (target.matches('button[data-action="back"]')) {
+                    if (currentPage <= 1) return;
+                    currentPage = currentPage - 1;
+                    applyFilter();
+                }
+            });
+
+            function renderAudit(entries) {
+                if (!auditBody) return;
+                auditBody.innerHTML = '';
+
+                function td(text, cls) {
+                    var cell = document.createElement('td');
+                    if (cls) cell.className = cls;
+                    cell.textContent = text == null ? '' : String(text);
+                    return cell;
+                }
+
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i] || {};
+                    var tr = document.createElement('tr');
+                    tr.className = 'audit-row';
+
+                    var actionCell = document.createElement('td');
+                    var badge = document.createElement('span');
+                    badge.className = 'badge audit audit-' + String(e.action || 'system');
+                    badge.textContent = String(e.action || '').toUpperCase();
+                    actionCell.appendChild(badge);
+
+                    if (e.changes && e.changes.length) {
+                        var toggle = document.createElement('button');
+                        toggle.type = 'button';
+                        toggle.className = 'btn btn-secondary btn-sm audit-toggle';
+                        toggle.textContent = 'Changes';
+                        toggle.setAttribute('data-action', 'toggle-audit');
+                        toggle.setAttribute('data-id', String(e.id || ''));
+                        actionCell.appendChild(toggle);
+                    }
+
+                    tr.appendChild(td(e.tsPht || formatPht(e.tsIso)));
+                    tr.appendChild(td(e.user));
+                    tr.appendChild(actionCell);
+                    tr.appendChild(td(e.module));
+                    tr.appendChild(td(e.recordLabel || e.recordId));
+                    tr.appendChild(td(e.details, 'desc'));
+                    tr.setAttribute('data-id', String(e.id || ''));
+                    tr.dataset.search = normalize([
+                        e.tsPht,
+                        e.datePht,
+                        e.user,
+                        e.action,
+                        e.module,
+                        e.recordLabel,
+                        e.recordId,
+                        e.details,
+                        stringifyChanges(e.changes || [])
+                    ].join(' '));
+                    auditBody.appendChild(tr);
+
+                    if (e.changes && e.changes.length) {
+                        var dtr = document.createElement('tr');
+                        dtr.className = 'audit-detail';
+                        dtr.style.display = 'none';
+                        dtr.setAttribute('data-parent-id', String(e.id || ''));
+
+                        var dtd = document.createElement('td');
+                        dtd.colSpan = 6;
+
+                        var wrap = document.createElement('div');
+                        wrap.className = 'audit-detail-wrap';
+                        var innerTable = document.createElement('table');
+                        innerTable.className = 'audit-changes';
+                        var thead = document.createElement('thead');
+                        var thr = document.createElement('tr');
+                        thr.appendChild(td('FIELD'));
+                        thr.appendChild(td('OLD'));
+                        thr.appendChild(td('NEW'));
+                        thead.appendChild(thr);
+                        innerTable.appendChild(thead);
+
+                        var tbody2 = document.createElement('tbody');
+                        for (var c = 0; c < e.changes.length; c++) {
+                            var ch = e.changes[c] || {};
+                            var rr = document.createElement('tr');
+                            rr.appendChild(td(ch.field || ''));
+                            rr.appendChild(td(ch.oldValue == null ? '' : String(ch.oldValue)));
+                            rr.appendChild(td(ch.newValue == null ? '' : String(ch.newValue)));
+                            tbody2.appendChild(rr);
+                        }
+                        innerTable.appendChild(tbody2);
+                        wrap.appendChild(innerTable);
+                        dtd.appendChild(wrap);
+                        dtr.appendChild(dtd);
+                        auditBody.appendChild(dtr);
+                    }
+                }
+            }
+
+            function applyAuditFilters() {
+                var q = normalize(auditSearch ? auditSearch.value : '');
+                var dateFrom = auditDateFrom && auditDateFrom.value ? String(auditDateFrom.value) : '';
+                var dateTo = auditDateTo && auditDateTo.value ? String(auditDateTo.value) : '';
+                var userQ = normalize(auditUserFilter ? auditUserFilter.value : '');
+                var actionQ = normalize(auditActionFilter ? auditActionFilter.value : '');
+                var moduleQ = normalize(auditModuleFilter ? auditModuleFilter.value : '');
+
+                var src = auditCache.length ? auditCache : readAudit();
+                if (!auditCache.length) auditCache = src.slice();
+
+                var filtered = [];
+                for (var i = 0; i < src.length; i++) {
+                    var e = src[i] || {};
+                    var datePht = e.datePht || phtDate(e.tsIso);
+
+                    if (dateFrom && (!datePht || datePht < dateFrom)) continue;
+                    if (dateTo && (!datePht || datePht > dateTo)) continue;
+
+                    if (userQ && normalize(e.user || '').indexOf(userQ) === -1) continue;
+                    if (actionQ && normalize(e.action || '') !== actionQ) continue;
+                    if (moduleQ && normalize(e.module || '') !== moduleQ) continue;
+
+                    var hay = normalize([
+                        e.tsPht,
+                        e.datePht,
+                        e.user,
+                        e.action,
+                        e.module,
+                        e.recordLabel,
+                        e.recordId,
+                        e.details,
+                        stringifyChanges(e.changes || [])
+                    ].join(' '));
+                    if (q && hay.indexOf(q) === -1) continue;
+                    filtered.push(e);
+                }
+
+                auditFilteredEntries = filtered;
+                var totalPages = Math.max(1, Math.ceil(filtered.length / AUDIT_PAGE_SIZE));
+                if (auditCurrentPage > totalPages) auditCurrentPage = totalPages;
+
+                renderAuditPagination(filtered.length);
+
+                var start = (auditCurrentPage - 1) * AUDIT_PAGE_SIZE;
+                var end = start + AUDIT_PAGE_SIZE;
+                var page = filtered.slice(start, end);
+                renderAudit(page);
+            }
+
+            function renderAuditPagination(totalMatches) {
+                if (!auditPagination) return;
+
+                var totalPages = Math.max(1, Math.ceil(totalMatches / AUDIT_PAGE_SIZE));
+                if (auditCurrentPage > totalPages) auditCurrentPage = totalPages;
+
+                if (totalMatches <= AUDIT_PAGE_SIZE) {
+                    auditPagination.style.display = 'none';
+                    auditPagination.innerHTML = '';
+                    return;
+                }
+
+                auditPagination.style.display = 'flex';
+                auditPagination.innerHTML = '';
+                auditPagination.setAttribute('data-total-pages', String(totalPages));
+
+                var backBtn = document.createElement('button');
+                backBtn.type = 'button';
+                backBtn.className = 'btn btn-secondary btn-sm';
+                backBtn.textContent = 'Back';
+                backBtn.setAttribute('data-action', 'back');
+                if (auditCurrentPage <= 1) backBtn.disabled = true;
+                auditPagination.appendChild(backBtn);
+
+                var WINDOW_SIZE = PAGE_WINDOW_SIZE;
+                var startPage = auditCurrentPage;
+                var maxStart = Math.max(1, totalPages - WINDOW_SIZE + 1);
+                if (startPage > maxStart) startPage = maxStart;
+                var endPage = Math.min(totalPages, startPage + WINDOW_SIZE - 1);
+
+                for (var p = startPage; p <= endPage; p++) {
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn btn-secondary btn-sm' + (p === auditCurrentPage ? ' is-active' : '');
+                    btn.textContent = String(p);
+                    btn.setAttribute('data-page', String(p));
+                    auditPagination.appendChild(btn);
+                }
+
+                if (endPage < totalPages) {
+                    var dots = document.createElement('button');
+                    dots.type = 'button';
+                    dots.className = 'btn btn-secondary btn-sm';
+                    dots.textContent = '...';
+                    dots.disabled = true;
+                    auditPagination.appendChild(dots);
+                }
+
+                var nextBtn = document.createElement('button');
+                nextBtn.type = 'button';
+                nextBtn.className = 'btn btn-secondary btn-sm';
+                nextBtn.textContent = 'Next';
+                nextBtn.setAttribute('data-action', 'next');
+                if (auditCurrentPage >= totalPages) nextBtn.disabled = true;
+                auditPagination.appendChild(nextBtn);
+            }
+
+            function allMatchingRecordRows() {
+                var parsed = parseStatusSearch(search.value);
+                var tokens = parsed.tokens;
+                var statusFilter = parsed.status;
+                var dept = normalize(deptFilter.value);
+                var cost = (costFilter && costFilter.value) ? String(costFilter.value) : '';
+                var rows = table.tBodies[0].rows;
+                var matches = [];
+
+                for (var i = 0; i < rows.length; i++) {
+                    var rowText = rows[i].dataset.search || '';
+                    var matchesText = true;
+                    if (tokens.length) {
+                        for (var t = 0; t < tokens.length; t++) {
+                            if (!tokens[t]) continue;
+                            if (rowText.indexOf(tokens[t]) === -1) {
+                                matchesText = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    var matchesStatus = !statusFilter || String(rows[i].dataset.status || '') === statusFilter;
+                    var matchesDept = !dept || normalize(rows[i].dataset.deptbranch || '') === dept;
+                    var matchesCost = !cost || String(rows[i].dataset.costbucket || '') === cost;
+                    if (matchesText && matchesStatus && matchesDept && matchesCost) matches.push(rows[i]);
+                }
+
+                return matches;
+            }
+
+            if (auditSearch) {
+                auditSearch.addEventListener('input', function () {
+                    auditCurrentPage = 1;
+                    applyAuditFilters();
+                });
+            }
+
+            if (auditDateFrom) {
+                auditDateFrom.addEventListener('change', function () {
+                    auditCurrentPage = 1;
+                    applyAuditFilters();
+                });
+            }
+
+            if (auditDateTo) {
+                auditDateTo.addEventListener('change', function () {
+                    auditCurrentPage = 1;
+                    applyAuditFilters();
+                });
+            }
+
+            if (auditUserFilter) {
+                auditUserFilter.addEventListener('input', function () {
+                    auditCurrentPage = 1;
+                    applyAuditFilters();
+                });
+            }
+
+            if (auditActionFilter) {
+                auditActionFilter.addEventListener('change', function () {
+                    auditCurrentPage = 1;
+                    applyAuditFilters();
+                });
+            }
+
+            if (auditModuleFilter) {
+                auditModuleFilter.addEventListener('change', function () {
+                    auditCurrentPage = 1;
+                    applyAuditFilters();
+                });
+            }
+
+            clearAuditBtn.addEventListener('click', function () {
+                if (!confirm('Clear audit trail?')) return;
+                writeAudit([]);
+                auditCurrentPage = 1;
+                auditCache = [];
+                appendAudit({
+                    action: 'clear',
+                    module: 'audit',
+                    user: user,
+                    tsIso: new Date().toISOString(),
+                    details: 'Cleared audit trail'
+                });
+            });
+
+            if (auditBody) {
+                auditBody.addEventListener('click', function (e) {
+                    var target = e.target;
+                    if (!target) return;
+                    if (!target.matches('button[data-action="toggle-audit"][data-id]')) return;
+                    var id = target.getAttribute('data-id');
+                    if (!id) return;
+                    var rows = auditBody.querySelectorAll('tr.audit-detail');
+                    for (var i = 0; i < rows.length; i++) {
+                        if (String(rows[i].getAttribute('data-parent-id') || '') !== String(id)) continue;
+                        rows[i].style.display = rows[i].style.display === 'none' ? '' : 'none';
+                    }
+                });
+            }
+
+            if (auditPagination) {
+                auditPagination.addEventListener('click', function (e) {
+                    var target = e.target;
+                    if (!target) return;
+
+                    if (target.matches('button[data-page]')) {
+                        var page = Number(target.getAttribute('data-page'));
+                        if (!isFinite(page) || page < 1) return;
+                        auditCurrentPage = page;
+                        applyAuditFilters();
+                        return;
+                    }
+
+                    if (target.matches('button[data-action="next"]')) {
+                        var totalPages = Number(auditPagination.getAttribute('data-total-pages'));
+                        if (!isFinite(totalPages) || totalPages < 1) totalPages = 1;
+                        if (auditCurrentPage >= totalPages) return;
+                        auditCurrentPage = auditCurrentPage + 1;
+                        applyAuditFilters();
+                        return;
+                    }
+
+                    if (target.matches('button[data-action="back"]')) {
+                        if (auditCurrentPage <= 1) return;
+                        auditCurrentPage = auditCurrentPage - 1;
+                        applyAuditFilters();
+                    }
+                });
+            }
+
+            function escapeDelimited(value, delimiter) {
+                var s = value == null ? '' : String(value);
+                var del = delimiter;
+                var delClass = del === '\t' ? '\\t' : del.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                var pattern = new RegExp('["\\n\\r' + delClass + ']');
+                var needsQuotes = pattern.test(s) || /^\s|\s$/.test(s);
+                s = s.replace(/"/g, '""');
+                return needsQuotes ? '"' + s + '"' : s;
+            }
+
+            function excelSafeText(value) {
+                var s = value == null ? '' : String(value);
+                if (!s) return '';
+                if (/^[=+\-@]/.test(s)) return "'" + s;
+                return s;
+            }
+
+            function xmlEscape(value) {
+                return String(value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&apos;');
+            }
+
+            function htmlEscape(value) {
+                return String(value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function exportVisibleRowsToPdf() {
+                var headCells = table.tHead ? table.tHead.rows[0].cells : [];
+                var colHeaders = [];
+                var colIndices = [];
+                for (var h = 0; h < headCells.length; h++) {
+                    var headerText = (headCells[h].innerText || '').trim();
+                    if (headCells[h].style.display === 'none') continue;
+                    if (normalize(headerText) === 'status') continue;
+                    if (normalize(headerText) === 'action') continue;
+                    colHeaders.push(headerText);
+                    colIndices.push(h);
+                }
+
+                var rows = allMatchingRecordRows();
+                var bodyRowsHtml = [];
+
+                for (var r = 0; r < rows.length; r++) {
+                    var tr = rows[r];
+                    var tds = [];
+                    for (var c = 0; c < colHeaders.length; c++) {
+                        var txt = '';
+                        var idx = colIndices[c];
+                        if (tr.cells[idx]) txt = (tr.cells[idx].innerText || '').trim();
+                        tds.push('<td>' + htmlEscape(txt) + '</td>');
+                    }
+                    bodyRowsHtml.push('<tr>' + tds.join('') + '</tr>');
+                }
+
+                var now = new Date();
+                var yyyy = String(now.getFullYear());
+                var mm = String(now.getMonth() + 1).padStart(2, '0');
+                var dd = String(now.getDate()).padStart(2, '0');
+                var dateStr = yyyy + '-' + mm + '-' + dd;
+
+                var ths = [];
+                for (var i = 0; i < colHeaders.length; i++) {
+                    ths.push('<th>' + htmlEscape(colHeaders[i]) + '</th>');
+                }
+
+                var logoSrc = 'images/logo-v1.png';
+                var reportHtml = '';
+                reportHtml += '<!doctype html><html><head><meta charset="utf-8">';
+                reportHtml += '<title>SSS Inventory Records - ' + htmlEscape(dateStr) + '</title>';
+                reportHtml += '<style>';
+                reportHtml += 'body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:24px;}';
+                reportHtml += '.header{display:flex;align-items:center;gap:14px;margin-bottom:16px;}';
+                reportHtml += '.header img{height:40px;width:auto;}';
+                reportHtml += '.title{font-size:18px;font-weight:700;line-height:1.2;}';
+                reportHtml += '.sub{font-size:12px;color:#475569;margin-top:2px;}';
+                reportHtml += 'table{width:100%;border-collapse:collapse;font-size:11px;}';
+                reportHtml += 'th,td{border:1px solid #cbd5e1;padding:6px 8px;vertical-align:top;}';
+                reportHtml += 'th{background:#f1f5f9;font-weight:700;text-align:left;position:sticky;top:0;}';
+                reportHtml += '@page{size:landscape;margin:12mm;}';
+                reportHtml += '@media print{body{margin:0;} .no-print{display:none;}}';
+                reportHtml += '</style>';
+                reportHtml += '</head><body>';
+                reportHtml += '<div class="header">';
+                reportHtml += '<img src="' + htmlEscape(logoSrc) + '" alt="SSS">';
+                reportHtml += '<div><div class="title">SSS Inventory Records</div><div class="sub">Export date: ' + htmlEscape(dateStr) + ' | Rows: ' + String(bodyRowsHtml.length) + '</div></div>';
+                reportHtml += '</div>';
+                reportHtml += '<table><thead><tr>' + ths.join('') + '</tr></thead><tbody>' + bodyRowsHtml.join('') + '</tbody></table>';
+                reportHtml += '<script>window.onload=function(){setTimeout(function(){window.print();},200);};<\/script>';
+                reportHtml += '</body></html>';
+
+                var win = window.open('', '_blank');
+                if (!win) {
+                    alert('Popup blocked. Please allow popups to export PDF.');
+                    return;
+                }
+                win.document.open();
+                win.document.write(reportHtml);
+                win.document.close();
+            }
+
+            function exportVisibleRowsToSpreadsheetXml() {
+                var headCells = table.tHead ? table.tHead.rows[0].cells : [];
+                var colHeaders = [];
+                var colIndices = [];
+                var colTypes = [];
+                var colStdKeys = [];
+                var colSys = [];
+
+                for (var h = 0; h < headCells.length; h++) {
+                    var headerText = (headCells[h].innerText || '').trim();
+                    if (headCells[h].style.display === 'none') continue;
+                    if (normalize(headerText) === 'status') continue;
+                    if (normalize(headerText) === 'action') continue;
+                    colHeaders.push(headerText);
+                    colIndices.push(h);
+                    colTypes.push(String(headCells[h].getAttribute('data-col-type') || ''));
+                    colStdKeys.push(String(headCells[h].getAttribute('data-standard-key') || ''));
+                    colSys.push(String(headCells[h].getAttribute('data-system-col') || ''));
+                }
+
+                var visibleRows = allMatchingRecordRows();
+
+                var parts = [];
+                parts.push('<?xml version="1.0" encoding="UTF-8"?>');
+                parts.push('<?mso-application progid="Excel.Sheet"?>');
+                parts.push('<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">');
+                parts.push('<Worksheet ss:Name="Records">');
+                parts.push('<Table>');
+
+                parts.push('<Row>');
+                for (var i = 0; i < colHeaders.length; i++) {
+                    parts.push('<Cell><Data ss:Type="String">' + xmlEscape(colHeaders[i]) + '</Data></Cell>');
+                }
+                parts.push('</Row>');
+
+                for (var vr = 0; vr < visibleRows.length; vr++) {
+                    var tr = visibleRows[vr];
+                    parts.push('<Row>');
+                    for (var c = 0; c < colHeaders.length; c++) {
+                        var cellText = '';
+                        var idx = colIndices[c];
+                        if (tr.cells[idx]) cellText = (tr.cells[idx].innerText || '').trim();
+                        var colType = colTypes[c] || '';
+                        var stdKey = colStdKeys[c] || '';
+                        var sysCol = colSys[c] || '';
+                        if (sysCol === 'recno' || stdKey === 'acqcst' || stdKey === 'accdep' || stdKey === 'bvalue' || colType === 'number' || colType === 'decimal') {
+                            var n = Number(String(cellText).replace(/,/g, ''));
+                            if (isFinite(n)) {
+                                parts.push('<Cell><Data ss:Type="Number">' + String(n) + '</Data></Cell>');
+                            } else {
+                                parts.push('<Cell><Data ss:Type="String">' + xmlEscape(excelSafeText(cellText)) + '</Data></Cell>');
+                            }
+                        } else {
+                            parts.push('<Cell><Data ss:Type="String">' + xmlEscape(excelSafeText(cellText)) + '</Data></Cell>');
+                        }
+                    }
+                    parts.push('</Row>');
+                }
+
+                parts.push('</Table>');
+                parts.push('</Worksheet>');
+                parts.push('</Workbook>');
+
+                var xml = parts.join('');
+                var blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+
+                var d = new Date();
+                var yyyy = String(d.getFullYear());
+                var mm = String(d.getMonth() + 1).padStart(2, '0');
+                var dd = String(d.getDate()).padStart(2, '0');
+                var filename = 'sss-inventory-records-' + yyyy + '-' + mm + '-' + dd + '.xml';
+
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () {
+                    URL.revokeObjectURL(url);
+                }, 0);
+            }
+
+            function exportVisibleRowsToDelimited(format) {
+                var delimiter = ',';
+                var extension = 'csv';
+                var addSepLine = false;
+
+                if (format === 'excel_csv_sep') {
+                    delimiter = ',';
+                    extension = 'csv';
+                    addSepLine = true;
+                } else if (format === 'calc_csv') {
+                    delimiter = ';';
+                    extension = 'csv';
+                } else if (format === 'tsv') {
+                    delimiter = '\t';
+                    extension = 'tsv';
+                }
+
+                var headCells = table.tHead ? table.tHead.rows[0].cells : [];
+                var headers = [];
+                var colIndices = [];
+                var colTypes = [];
+                var colStdKeys = [];
+                var colSys = [];
+                for (var h = 0; h < headCells.length; h++) {
+                    if (headCells[h].style.display === 'none') continue;
+                    var name = excelSafeText(headCells[h].innerText);
+                    if (normalize(name) === 'status') continue;
+                    if (normalize(name) === 'action') continue;
+                    headers.push(escapeDelimited(name, delimiter));
+                    colIndices.push(h);
+                    colTypes.push(String(headCells[h].getAttribute('data-col-type') || ''));
+                    colStdKeys.push(String(headCells[h].getAttribute('data-standard-key') || ''));
+                    colSys.push(String(headCells[h].getAttribute('data-system-col') || ''));
+                }
+
+                var lines = [];
+                if (addSepLine) {
+                    lines.push('sep=' + delimiter);
+                }
+                lines.push(headers.join(delimiter));
+
+                var rows = allMatchingRecordRows();
+                for (var r = 0; r < rows.length; r++) {
+                    var tr = rows[r];
+                    var out = [];
+                    for (var c = 0; c < colIndices.length; c++) {
+                        var idx = colIndices[c];
+                        var text = tr.cells[idx] ? tr.cells[idx].innerText : '';
+                        var colType = colTypes[c] || '';
+                        var stdKey = colStdKeys[c] || '';
+                        var sysCol = colSys[c] || '';
+                        if (sysCol === 'recno' || stdKey === 'acqcst' || stdKey === 'accdep' || stdKey === 'bvalue' || colType === 'number' || colType === 'decimal') {
+                            out.push(escapeDelimited(text.replace(/,/g, ''), delimiter));
+                        } else {
+                            out.push(escapeDelimited(excelSafeText(text), delimiter));
+                        }
+                    }
+                    lines.push(out.join(delimiter));
+                }
+
+                var content = '\ufeff' + lines.join('\r\n');
+                var mime = format === 'tsv' ? 'text/tab-separated-values;charset=utf-8;' : 'text/csv;charset=utf-8;';
+                var blob = new Blob([content], { type: mime });
+                var url = URL.createObjectURL(blob);
+
+                var d = new Date();
+                var yyyy = String(d.getFullYear());
+                var mm = String(d.getMonth() + 1).padStart(2, '0');
+                var dd = String(d.getDate()).padStart(2, '0');
+                var filename = 'sss-inventory-records-' + yyyy + '-' + mm + '-' + dd + '.' + extension;
+
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () {
+                    URL.revokeObjectURL(url);
+                }, 0);
+            }
+
+            exportBtn.addEventListener('click', function () {
+                var visibleCount = 0;
+                if (exportFormat.value === 'spreadsheet_xml_all_sheets') {
+                    visibleCount = 0;
+                    var wb = readWorkbook();
+                    for (var i = 0; i < (wb.sheets || []).length; i++) {
+                        var sid = String(wb.sheets[i] && wb.sheets[i].id || '');
+                        if (!sid) continue;
+                        var list = wb.recordsBySheet && wb.recordsBySheet[sid] ? wb.recordsBySheet[sid] : [];
+                        visibleCount += (list && list.length) ? list.length : 0;
+                    }
+                } else {
+                    visibleCount = allMatchingRecordRows().length;
+                }
+
+                appendAudit({
+                    action: 'export',
+                    module: 'records',
+                    user: user,
+                    tsIso: new Date().toISOString(),
+                    details: (function () {
+                        var s = activeSheet();
+                        var sName = s ? String(s.name || '') : '';
+                        if (exportFormat.value === 'spreadsheet_xml_all_sheets') {
+                            return 'Format: ' + exportFormat.value + ' | All sheets | Rows: ' + String(visibleCount);
+                        }
+                        return 'Sheet: ' + (sName || String(readWorkbook().activeSheetId || '')) + ' | Format: ' + exportFormat.value + ' | Rows: ' + String(visibleCount);
+                    })()
+                });
+
+                if (exportFormat.value === 'spreadsheet_xml_all_sheets') {
+                    exportAllSheetsToSpreadsheetXml();
+                } else if (exportFormat.value === 'spreadsheet_xml') {
+                    exportVisibleRowsToSpreadsheetXml();
+                } else if (exportFormat.value === 'pdf') {
+                    exportVisibleRowsToPdf();
+                } else if (exportFormat.value === 'fods') {
+                    exportVisibleRowsToFods();
+                } else if (exportFormat.value === 'word_doc') {
+                    exportVisibleRowsToWordDoc();
+                } else {
+                    exportVisibleRowsToDelimited(exportFormat.value);
+                }
+            });
+
+            function exportAllSheetsToSpreadsheetXml() {
+                var wb = readWorkbook();
+                ensureRecordsTableColumns();
+                var headCells = table.tHead ? table.tHead.rows[0].cells : [];
+
+                var colHeaders = [];
+                var colTypes = [];
+                var colStdKeys = [];
+                var colSys = [];
+                var colCustomIds = [];
+
+                for (var h = 0; h < headCells.length; h++) {
+                    var headerText = (headCells[h].innerText || '').trim();
+                    if (headCells[h].style.display === 'none') continue;
+                    if (normalize(headerText) === 'status') continue;
+                    if (normalize(headerText) === 'action') continue;
+                    colHeaders.push(headerText);
+                    colTypes.push(String(headCells[h].getAttribute('data-col-type') || ''));
+                    colStdKeys.push(String(headCells[h].getAttribute('data-standard-key') || ''));
+                    colSys.push(String(headCells[h].getAttribute('data-system-col') || ''));
+                    colCustomIds.push(String(headCells[h].getAttribute('data-custom-field-id') || ''));
+                }
+
+                function recordValueByNormalizedKey(rec, nkey) {
+                    if (!rec) return '';
+                    if (nkey === 'deptcd') return rec.deptcd;
+                    if (nkey === 'deptbranch') return rec.deptbranch;
+                    if (nkey === 'tmnum') return rec.tmnum;
+                    if (nkey === 'description') return rec.description;
+                    if (nkey === 'sernum') return rec.sernum;
+                    if (nkey === 'oldppronum') return rec.oldppronum;
+                    if (nkey === 'pronum') return rec.pronum;
+                    if (nkey === 'acqdte') return rec.acqdte;
+                    if (nkey === 'acqcst') return rec.acqcst;
+                    if (nkey === 'accdep') return rec.accdep;
+                    if (nkey === 'bvalue') return rec.bvalue;
+                    if (nkey === 'usercd') return rec.usercd;
+                    if (nkey === 'lastname') return rec.lastname;
+                    if (nkey === 'firstname') return rec.firstname;
+                    if (nkey === 'middlename') return rec.middlename;
+
+                    var defs = customFieldsForUse();
+                    for (var i = 0; i < defs.length; i++) {
+                        var d = defs[i] || {};
+                        if (normalize(String(d.name || '')) === nkey) {
+                            var cid = String(d.id || '');
+                            var cv = (rec.custom && typeof rec.custom === 'object') ? rec.custom[cid] : '';
+                            return cv == null ? '' : String(cv);
+                        }
+                    }
+                    return '';
+                }
+
+                var parts = [];
+                parts.push('<?xml version="1.0" encoding="UTF-8"?>');
+                parts.push('<?mso-application progid="Excel.Sheet"?>');
+                parts.push('<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">');
+
+                for (var si = 0; si < (wb.sheets || []).length; si++) {
+                    var s = wb.sheets[si] || {};
+                    var sid = String(s.id || '');
+                    if (!sid) continue;
+                    var sheetName = String(s.name || ('Sheet ' + String(si + 1)));
+                    var safeName = sheetName.replace(/[\[\]\*\?\\\/]/g, ' ').slice(0, 31);
+                    var list = wb.recordsBySheet && wb.recordsBySheet[sid] ? wb.recordsBySheet[sid] : [];
+
+                    parts.push('<Worksheet ss:Name="' + xmlEscape(safeName) + '">');
+                    parts.push('<Table>');
+
+                    parts.push('<Row>');
+                    for (var h0 = 0; h0 < colHeaders.length; h0++) {
+                        parts.push('<Cell><Data ss:Type="String">' + xmlEscape(colHeaders[h0]) + '</Data></Cell>');
+                    }
+                    parts.push('</Row>');
+
+                    for (var r = 0; r < (list || []).length; r++) {
+                        var rec = list[r] || {};
+                        parts.push('<Row>');
+                        for (var c = 0; c < colHeaders.length; c++) {
+                            var stdKey = colStdKeys[c] || '';
+                            var sysCol = colSys[c] || '';
+                            var cid = colCustomIds[c] || '';
+                            var colType = colTypes[c] || '';
+                            var raw;
+                            if (sysCol === 'recno') raw = String(r + 1);
+                            else if (stdKey) raw = rec[stdKey];
+                            else if (cid) raw = (rec.custom && typeof rec.custom === 'object') ? rec.custom[cid] : '';
+                            else raw = '';
+                            var text = raw == null ? '' : String(raw);
+
+                            if (sysCol === 'recno' || stdKey === 'acqcst' || stdKey === 'accdep' || stdKey === 'bvalue' || colType === 'number' || colType === 'decimal') {
+                                var n = Number(String(text).replace(/,/g, ''));
+                                if (isFinite(n)) {
+                                    parts.push('<Cell><Data ss:Type="Number">' + String(n) + '</Data></Cell>');
+                                } else {
+                                    parts.push('<Cell><Data ss:Type="String">' + xmlEscape(excelSafeText(text)) + '</Data></Cell>');
+                                }
+                            } else {
+                                parts.push('<Cell><Data ss:Type="String">' + xmlEscape(excelSafeText(text)) + '</Data></Cell>');
+                            }
+                        }
+                        parts.push('</Row>');
+                    }
+
+                    parts.push('</Table>');
+                    parts.push('</Worksheet>');
+                }
+
+                parts.push('</Workbook>');
+
+                var xml = parts.join('');
+                var blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+
+                var d = new Date();
+                var yyyy = String(d.getFullYear());
+                var mm = String(d.getMonth() + 1).padStart(2, '0');
+                var dd = String(d.getDate()).padStart(2, '0');
+                var filename = 'sss-inventory-all-sheets-' + yyyy + '-' + mm + '-' + dd + '.xml';
+
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () {
+                    URL.revokeObjectURL(url);
+                }, 0);
+            }
+
+            clearRecordsBtn.addEventListener('click', function () {
+                var s = activeSheet();
+                var sName = s ? String(s.name || '') : '';
+                if (!confirm('Clear all saved records in ' + (sName ? ('"' + sName + '"') : 'this sheet') + '?')) return;
+                var before = currentRecords();
+                var count = before.length;
+                var beforeTotals = totalsSnapshot(before);
+                appendAudit({
+                    action: 'clear',
+                    module: 'records',
+                    user: user,
+                    tsIso: new Date().toISOString(),
+                    details: 'Sheet: ' + (sName || String(readWorkbook().activeSheetId || '')) + ' | Cleared records: ' + String(count) + ' | Totals: ' + beforeTotals + ' -> ' + totalsSnapshot([])
+                });
+                writeRecords([]);
+                renderRecords([]);
+                applyFilter(search.value);
+            });
+
+            tbody.addEventListener('click', function (e) {
+                var target = e.target;
+                if (!target) return;
+
+                var auditBtn = target.closest ? target.closest('button[data-action="open-record-audit"][data-id]') : null;
+                if (auditBtn) {
+                    var rid = auditBtn.getAttribute('data-id');
+                    var label = auditBtn.getAttribute('data-label') || '';
+                    var latest = findLatestUpdateAuditForRecordId(rid);
+                    if (!latest) {
+                        openRecordAuditModal(null, label, rid);
+                    } else {
+                        openRecordAuditModal(latest, label, rid);
+                    }
+                    return;
+                }
+
+                if (target.matches('button[data-action="delete"][data-id]')) {
+                    var id = target.getAttribute('data-id');
+                    var records = currentRecords();
+                    var deleted = null;
+                    for (var j = 0; j < records.length; j++) {
+                        if (String(records[j].id) === String(id)) {
+                            deleted = records[j];
+                            break;
+                        }
+                    }
+                    var next = [];
+                    for (var i = 0; i < records.length; i++) {
+                        if (String(records[i].id) !== String(id)) next.push(records[i]);
+                    }
+
+                    var beforeTotals = totalsSnapshot(records);
+                    var afterTotals = totalsSnapshot(next);
+
+                    var changes = [];
+                    if (deleted) {
+                        var keys = ['deptcd', 'deptbranch', 'tmnum', 'description', 'sernum', 'oldppronum', 'pronum', 'acqdte', 'acqcst', 'accdep', 'bvalue', 'usercd', 'lastname', 'firstname', 'middlename'];
+                        for (var k = 0; k < keys.length; k++) {
+                            var key = keys[k];
+                            changes.push({
+                                field: key,
+                                oldValue: deleted[key] == null ? '' : String(deleted[key]),
+                                newValue: ''
+                            });
+                        }
+                    }
+
+                    appendAudit({
+                        action: 'delete',
+                        module: 'records',
+                        user: user,
+                        tsIso: new Date().toISOString(),
+                        recordId: id,
+                        recordLabel: deleted ? (String(deleted.deptcd || '') + ' / ' + String(deleted.tmnum || '')) : '',
+                        changes: changes,
+                        details: (function () {
+                            var s = activeSheet();
+                            var sName = s ? String(s.name || '') : '';
+                            var base = deleted ? ('Deleted record PRONUM: ' + String(deleted.pronum || '')) : 'Deleted record';
+                            return 'Sheet: ' + (sName || String(readWorkbook().activeSheetId || '')) + ' | ' + base + ' | Totals: ' + beforeTotals + ' -> ' + afterTotals;
+                        })()
+                    });
+
+                    writeRecords(next);
+                    renderRecords(next);
+                    applyFilter(search.value);
+                }
+            });
+
+            migrateNormalizeAllNumbersOnce();
+            var initial = currentRecords();
+            auditCache = readAudit();
+            ensureInitialSheetFromUrl();
+            renderSheetTabs();
+            initial = currentRecords();
+            renderRecords(initial);
+            currentPage = 1;
+            applyFilter(search.value);
+            applyAuditFilters();
+        })();
+

@@ -1,0 +1,142 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSS Inventory - Login</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="page">
+        <div class="card">
+            <div class="brand">
+                <img class="brand-logo" src="images/logo-v1.png" alt="SSS Inventory logo">
+                <div class="brand-text">
+                    <div class="brand-org">Social Security System</div>
+                    <div class="brand-app">Inventory Management Portal</div>
+                </div>
+            </div>
+
+            
+
+            <form class="form" id="loginForm" autocomplete="on">
+                <div class="alert" id="loginError" role="alert" aria-live="polite"></div>
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" name="username" id="username" autocomplete="username" placeholder="Enter your username" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <div class="password-field">
+                        <input type="password" name="password" id="password" autocomplete="current-password" placeholder="Enter your password" required>
+                        <button class="password-toggle" id="togglePassword" type="button" aria-label="Show password">Show</button>
+                    </div>
+                </div>
+                <div class="actions">
+                    <input type="submit" value="Sign in">
+                </div>
+                
+            </form>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            var AUTH_KEY = 'sss_inventory_authed_v1';
+            var USER_KEY = 'sss_inventory_user_v1';
+            var AUDIT_KEY = 'sss_inventory_audit_v1';
+            if (sessionStorage.getItem(AUTH_KEY) === '1') {
+                window.location.replace('index.html');
+                return;
+            }
+
+            var form = document.getElementById('loginForm');
+            var usernameEl = document.getElementById('username');
+            var passwordEl = document.getElementById('password');
+            var errorEl = document.getElementById('loginError');
+            var togglePasswordBtn = document.getElementById('togglePassword');
+
+            function setError(message) {
+                errorEl.textContent = message;
+                errorEl.style.display = message ? 'block' : 'none';
+            }
+
+            setError('');
+
+            togglePasswordBtn.addEventListener('click', function () {
+                var isHidden = passwordEl.type === 'password';
+                passwordEl.type = isHidden ? 'text' : 'password';
+                togglePasswordBtn.textContent = isHidden ? 'Hide' : 'Show';
+                togglePasswordBtn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+                passwordEl.focus();
+            });
+
+            function readAudit() {
+                try {
+                    var raw = localStorage.getItem(AUDIT_KEY);
+                    if (!raw) return [];
+                    var data = JSON.parse(raw);
+                    return Array.isArray(data) ? data : [];
+                } catch (e) {
+                    return [];
+                }
+            }
+
+            function writeAudit(entries) {
+                localStorage.setItem(AUDIT_KEY, JSON.stringify(entries));
+            }
+
+            function appendAudit(entry) {
+                var entries = readAudit();
+                var next = [
+                    {
+                        id: Date.now() + '-' + Math.random().toString(16).slice(2),
+                        tsIso: entry.tsIso || entry.ts || new Date().toISOString(),
+                        user: entry.user || '',
+                        action: entry.action || 'system',
+                        module: entry.module || 'auth',
+                        recordId: entry.recordId || '',
+                        recordLabel: entry.recordLabel || '',
+                        changes: Array.isArray(entry.changes) ? entry.changes : [],
+                        details: entry.details || ''
+                    }
+                ];
+
+                for (var i = 0; i < entries.length; i++) next.push(entries[i]);
+                if (next.length > 2000) next.length = 2000;
+                writeAudit(next);
+            }
+
+            form.addEventListener('submit', function (e) {
+                e.preventDefault();
+                setError('');
+
+                var username = (usernameEl.value || '').trim();
+                var password = passwordEl.value || '';
+
+                if (username === 'jhoanna' && password === '123' || username ==='admin' && password === '123') {
+                    sessionStorage.setItem(AUTH_KEY, '1');
+                    sessionStorage.setItem(USER_KEY, username);
+
+                    appendAudit({
+                        action: 'login',
+                        module: 'auth',
+                        user: username,
+                        tsIso: new Date().toISOString(),
+                        details: 'User signed in'
+                    });
+
+                    window.location.replace('index.html');
+                    return;
+                }
+               
+
+                setError('Invalid username or password.');
+                passwordEl.focus();
+                passwordEl.select();
+            });
+        })();
+    </script>
+</body>
+</html>

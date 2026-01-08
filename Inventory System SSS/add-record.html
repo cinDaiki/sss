@@ -1,0 +1,1237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSS Inventory - Add Record</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app">
+        <header class="topbar">
+            <div class="topbar-left">
+                <img class="topbar-logo" src="images/logo-v1.png" alt="SSS Inventory logo">
+                <div class="topbar-title">
+                    <div class="topbar-org">Social Security System</div>
+                    <div class="topbar-app">Inventory Management System</div>
+                </div>
+            </div>
+
+            <div class="topbar-right">
+                <div class="user-chip" id="userChip">Signed in</div>
+                <a class="btn btn-secondary" href="index.html">Back to Dashboard</a>
+                <button class="btn" id="logoutBtn" type="button">Logout</button>
+            </div>
+        </header>
+
+        <main class="container container-narrow">
+            <section class="hero">
+                <h1 class="h1" id="pageTitle">Add Record</h1>
+                <p class="lead" id="pageSubtitle">Enter the inventory record details below.</p>
+            </section>
+
+            <section class="panel">
+                <div class="panel-body">
+                    <form id="recordForm" class="record-form" autocomplete="off" novalidate>
+                        <div class="form-grid">
+                            <div class="field">
+                                <label for="deptcd">DEPTCD</label>
+                                <input class="input" id="deptcd" name="deptcd" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="deptbranch">DEPT/BRANCH</label>
+                                <input class="input" id="deptbranch" name="deptbranch" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="tmnum">TMNUM</label>
+                                <input class="input" id="tmnum" name="tmnum" type="text">
+                            </div>
+                            <div class="field field-span-2">
+                                <label for="description">DESCRIPTION</label>
+                                <input class="input" id="description" name="description" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="sernum">SERNUM</label>
+                                <input class="input" id="sernum" name="sernum" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="oldppronum">OLD PPRONUM</label>
+                                <input class="input" id="oldppronum" name="oldppronum" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="pronum">PRONUM</label>
+                                <input class="input" id="pronum" name="pronum" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="acqdte">ACQDTE</label>
+                                <input class="input" id="acqdte" name="acqdte" type="date">
+                            </div>
+                            <div class="field">
+                                <label for="acqcst">ACQCST</label>
+                                <input class="input" id="acqcst" name="acqcst" type="number" step="0.01" min="0">
+                            </div>
+                            <div class="field">
+                                <label for="accdep">ACCDEP</label>
+                                <input class="input" id="accdep" name="accdep" type="number" step="0.01" min="0">
+                            </div>
+                            <div class="field">
+                                <label for="bvalue">BVALUE</label>
+                                <input class="input" id="bvalue" name="bvalue" type="number" step="0.01" min="0">
+                            </div>
+                            <div class="field">
+                                <label for="usercd">USERCD</label>
+                                <input class="input" id="usercd" name="usercd" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="lastname">LAST NAME</label>
+                                <input class="input" id="lastname" name="lastname" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="firstname">FIRST NAME</label>
+                                <input class="input" id="firstname" name="firstname" type="text">
+                            </div>
+                            <div class="field">
+                                <label for="middlename">MIDDLE NAME</label>
+                                <input class="input" id="middlename" name="middlename" type="text">
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button class="btn btn-primary" id="saveBtn" type="submit">Save Record</button>
+                            <button class="btn btn-secondary" id="addCustomFieldBtn" type="button">+ Add Custom Field</button>
+                            <button class="btn btn-secondary" id="clearFormBtn" type="button">Clear Form</button>
+                            <a class="btn btn-secondary" href="index.html">Cancel</a>
+                            <div class="form-hint" id="recordHint" aria-live="polite"></div>
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div class="modal" id="customFieldModal" aria-hidden="true" style="display:none;">
+        <div class="modal-backdrop" data-action="close-custom-field"></div>
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="customFieldTitle">
+            <div class="modal-head">
+                <div>
+                    <div class="h2" id="customFieldTitle">Custom Fields</div>
+                    <div class="muted">Create or update custom fields for all records.</div>
+                </div>
+                <button class="btn btn-secondary" id="customFieldCloseBtn" type="button" data-action="close-custom-field">Close</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-grid">
+                    <div class="field field-span-2">
+                        <label for="cfName">Field Name</label>
+                        <input class="input" id="cfName" type="text" placeholder="e.g., Asset Tag">
+                    </div>
+                    <div class="field">
+                        <label for="cfType">Field Type</label>
+                        <select class="input input-select" id="cfType">
+                            <option value="text">Text</option>
+                            <option value="number">Number</option>
+                            <option value="decimal">Decimal</option>
+                            <option value="date">Date</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="cfRequired">Required</label>
+                        <select class="input input-select" id="cfRequired">
+                            <option value="no">No</option>
+                            <option value="yes">Yes</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="cfSheet">Applies to</label>
+                        <select class="input input-select" id="cfSheet"></select>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" id="cfSaveBtn" type="button">Save Field</button>
+                    <button class="btn btn-secondary" id="cfClearBtn" type="button">Clear</button>
+                    <div class="form-hint" id="cfHint" aria-live="polite"></div>
+                </div>
+
+                <div class="form-grid">
+                    <div class="field field-span-2">
+                        <label for="customFieldsSearch">Search</label>
+                        <input class="input" id="customFieldsSearch" type="text" placeholder="Search custom fields...">
+                    </div>
+                </div>
+
+                <div class="table-wrap" role="region" aria-label="Custom fields list" tabindex="0">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>NAME</th>
+                                <th>SHEET</th>
+                                <th>TYPE</th>
+                                <th>REQUIRED</th>
+                                <th>ACTION</th>
+                            </tr>
+                        </thead>
+                        <tbody id="customFieldsBody"></tbody>
+                    </table>
+                </div>
+
+                <div class="pagination" id="customFieldsPagination" aria-label="Custom fields pagination" role="navigation" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            var AUTH_KEY = 'sss_inventory_authed_v1';
+            var USER_KEY = 'sss_inventory_user_v1';
+            var RECORDS_KEY = 'sss_inventory_records_v1';
+            var AUDIT_KEY = 'sss_inventory_audit_v1';
+            var TOAST_KEY = 'sss_inventory_toast_v1';
+
+            if (sessionStorage.getItem(AUTH_KEY) !== '1') {
+                window.location.replace('login.html');
+                return;
+            }
+
+            var user = sessionStorage.getItem(USER_KEY) || 'User';
+            var userChip = document.getElementById('userChip');
+            var logoutBtn = document.getElementById('logoutBtn');
+            var form = document.getElementById('recordForm');
+            var clearFormBtn = document.getElementById('clearFormBtn');
+            var hintEl = document.getElementById('recordHint');
+            var pageTitle = document.getElementById('pageTitle');
+            var pageSubtitle = document.getElementById('pageSubtitle');
+            var saveBtn = document.getElementById('saveBtn');
+            var customFieldsGrid = document.getElementById('customFieldsGrid');
+            var addCustomFieldBtn = document.getElementById('addCustomFieldBtn');
+
+            var customFieldModal = document.getElementById('customFieldModal');
+            var customFieldCloseBtn = document.getElementById('customFieldCloseBtn');
+            var cfName = document.getElementById('cfName');
+            var cfType = document.getElementById('cfType');
+            var cfRequired = document.getElementById('cfRequired');
+            var cfSheet = document.getElementById('cfSheet');
+            var cfSaveBtn = document.getElementById('cfSaveBtn');
+            var cfClearBtn = document.getElementById('cfClearBtn');
+            var cfHint = document.getElementById('cfHint');
+            var customFieldsSearch = document.getElementById('customFieldsSearch');
+            var customFieldsBody = document.getElementById('customFieldsBody');
+            var customFieldsPagination = document.getElementById('customFieldsPagination');
+
+            var CUSTOM_FIELDS_KEY = 'sss_inventory_custom_fields_v1';
+            var CUSTOM_FIELDS_ADMIN_USERS = { 'admin': true, 'jhoanna': true };
+
+            userChip.textContent = 'Signed in as ' + user;
+
+            function isCustomFieldsAdmin() {
+                return !!CUSTOM_FIELDS_ADMIN_USERS[String(user || '')];
+            }
+
+            function normalizeHeader(value) {
+                return String(value == null ? '' : value)
+                    .toLowerCase()
+                    .replace(/\s+/g, '')
+                    .replace(/[^a-z0-9]/g, '');
+            }
+
+            function normalize(value) {
+                return String(value == null ? '' : value)
+                    .toLowerCase()
+                    .replace(/\s+/g, '')
+                    .trim();
+            }
+
+            function normalizeCustomFieldName(value) {
+                return normalizeHeader(value);
+            }
+
+            function readCustomFields() {
+                try {
+                    var raw = localStorage.getItem(CUSTOM_FIELDS_KEY);
+                    if (!raw) return [];
+                    var data = JSON.parse(raw);
+                    return Array.isArray(data) ? data : [];
+                } catch (e) {
+                    return [];
+                }
+            }
+
+            function writeCustomFields(fields) {
+                localStorage.setItem(CUSTOM_FIELDS_KEY, JSON.stringify(fields || []));
+            }
+
+            function customFieldsForUse() {
+                var list = readCustomFields();
+                list.sort(function (a, b) {
+                    var an = String(a && a.name || '');
+                    var bn = String(b && b.name || '');
+                    return an.localeCompare(bn);
+                });
+                return list;
+            }
+
+            function openCustomFieldModal() {
+                if (!customFieldModal) return;
+                customFieldModal.style.display = 'block';
+                customFieldModal.setAttribute('aria-hidden', 'false');
+                customFieldsListQuery = '';
+                customFieldsPage = 1;
+                if (customFieldsSearch) customFieldsSearch.value = '';
+                renderCustomFieldSheetOptions();
+                renderCustomFieldsTable();
+                if (cfName) cfName.focus();
+            }
+
+            function closeCustomFieldModal() {
+                if (!customFieldModal) return;
+                customFieldModal.style.display = 'none';
+                customFieldModal.setAttribute('aria-hidden', 'true');
+            }
+
+            function setCustomFieldHint(message) {
+                if (!cfHint) return;
+                cfHint.textContent = message || '';
+            }
+
+            var editingCustomFieldId = '';
+
+            var customFieldsListQuery = '';
+            var customFieldsPage = 1;
+            var customFieldsPageSize = 10;
+
+            function renderCustomFieldSheetOptions() {
+                if (!cfSheet) return;
+                var wb = readWorkbook();
+                var selected = String(cfSheet.value || '');
+                cfSheet.innerHTML = '';
+
+                var optAll = document.createElement('option');
+                optAll.value = '';
+                optAll.textContent = 'All Sheets';
+                cfSheet.appendChild(optAll);
+
+                for (var i = 0; i < (wb && wb.sheets ? wb.sheets.length : 0); i++) {
+                    var s = wb.sheets[i] || {};
+                    var sid = String(s.id || '');
+                    if (!sid) continue;
+                    var opt = document.createElement('option');
+                    opt.value = sid;
+                    opt.textContent = String(s.name || sid);
+                    cfSheet.appendChild(opt);
+                }
+
+                if (selected && sheetById(wb, selected)) cfSheet.value = selected;
+                else cfSheet.value = '';
+            }
+
+            function clearCustomFieldForm() {
+                editingCustomFieldId = '';
+                if (cfName) cfName.value = '';
+                if (cfType) cfType.value = 'text';
+                if (cfRequired) cfRequired.value = 'no';
+                if (cfSheet) cfSheet.value = '';
+                setCustomFieldHint('');
+            }
+
+            function sheetNameForId(wb, sheetId) {
+                if (!sheetId) return 'All Sheets';
+                var s = sheetById(wb, sheetId);
+                return s ? String(s.name || sheetId) : String(sheetId);
+            }
+
+            function findCustomFieldById(list, id) {
+                for (var i = 0; i < list.length; i++) {
+                    if (String(list[i].id) === String(id)) return list[i];
+                }
+                return null;
+            }
+
+            function renderCustomFieldsTable() {
+                if (!customFieldsBody) return;
+
+                var defs = customFieldsForUse();
+                var wb = readWorkbook();
+                var filtered = [];
+                var q = normalize(String(customFieldsListQuery || ''));
+                for (var f = 0; f < defs.length; f++) {
+                    var d0 = defs[f] || {};
+                    if (!q) {
+                        filtered.push(d0);
+                        continue;
+                    }
+                    var hay = normalize([d0.name, sheetNameForId(wb, d0.sheetId == null ? '' : String(d0.sheetId)), d0.type, d0.required ? 'yes required' : 'no optional'].join(' '));
+                    if (hay.indexOf(q) !== -1) filtered.push(d0);
+                }
+
+                var totalPages = Math.max(1, Math.ceil(filtered.length / customFieldsPageSize));
+                if (customFieldsPage < 1) customFieldsPage = 1;
+                if (customFieldsPage > totalPages) customFieldsPage = totalPages;
+
+                var start = (customFieldsPage - 1) * customFieldsPageSize;
+                var pageItems = filtered.slice(start, start + customFieldsPageSize);
+
+                customFieldsBody.innerHTML = '';
+                for (var i = 0; i < pageItems.length; i++) {
+                    var d = pageItems[i] || {};
+                    var tr = document.createElement('tr');
+                    var td1 = document.createElement('td');
+                    td1.textContent = d.name || '';
+                    var td2 = document.createElement('td');
+                    td2.textContent = sheetNameForId(wb, d.sheetId == null ? '' : String(d.sheetId));
+                    var td3 = document.createElement('td');
+                    td3.textContent = String(d.type || 'text');
+                    var td4 = document.createElement('td');
+                    td4.textContent = d.required ? 'Yes' : 'No';
+                    var td5 = document.createElement('td');
+
+                    var editBtn = document.createElement('button');
+                    editBtn.type = 'button';
+                    editBtn.className = 'btn btn-secondary btn-sm';
+                    editBtn.textContent = 'Edit';
+                    editBtn.setAttribute('data-action', 'edit-custom-field');
+                    editBtn.setAttribute('data-id', String(d.id || ''));
+
+                    var delBtn = document.createElement('button');
+                    delBtn.type = 'button';
+                    delBtn.className = 'btn btn-danger btn-sm';
+                    delBtn.textContent = 'Delete';
+                    delBtn.setAttribute('data-action', 'delete-custom-field');
+                    delBtn.setAttribute('data-id', String(d.id || ''));
+
+                    td5.appendChild(editBtn);
+                    td5.appendChild(delBtn);
+
+                    tr.appendChild(td1);
+                    tr.appendChild(td2);
+                    tr.appendChild(td3);
+                    tr.appendChild(td4);
+                    tr.appendChild(td5);
+                    customFieldsBody.appendChild(tr);
+                }
+
+                renderCustomFieldsPagination(totalPages);
+            }
+
+            function renderCustomFieldsPagination(totalPages) {
+                if (!customFieldsPagination) return;
+                if (totalPages <= 1) {
+                    customFieldsPagination.style.display = 'none';
+                    customFieldsPagination.innerHTML = '';
+                    return;
+                }
+
+                customFieldsPagination.style.display = 'flex';
+                customFieldsPagination.innerHTML = '';
+
+                function addBtn(label, page, disabled, active) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'btn btn-secondary btn-sm' + (active ? ' is-active' : '');
+                    b.textContent = label;
+                    if (disabled) b.disabled = true;
+                    b.setAttribute('data-page', String(page));
+                    customFieldsPagination.appendChild(b);
+                }
+
+                function addEllipsis() {
+                    var s = document.createElement('span');
+                    s.className = 'muted';
+                    s.style.alignSelf = 'center';
+                    s.style.padding = '0 4px';
+                    s.textContent = '...';
+                    customFieldsPagination.appendChild(s);
+                }
+
+                addBtn('Back', customFieldsPage - 1, customFieldsPage <= 1, false);
+
+                var windowSize = 2;
+                var start = Math.max(1, customFieldsPage - windowSize);
+                var end = Math.min(totalPages, customFieldsPage + windowSize);
+
+                if (start > 1) {
+                    addBtn('1', 1, false, customFieldsPage === 1);
+                    if (start > 2) addEllipsis();
+                }
+
+                for (var p = start; p <= end; p++) {
+                    addBtn(String(p), p, false, customFieldsPage === p);
+                }
+
+                if (end < totalPages) {
+                    if (end < totalPages - 1) addEllipsis();
+                    addBtn(String(totalPages), totalPages, false, customFieldsPage === totalPages);
+                }
+
+                addBtn('Next', customFieldsPage + 1, customFieldsPage >= totalPages, false);
+            }
+
+            function renderCustomFieldsGrid(record) {
+                if (!customFieldsGrid) return;
+                var defs = customFieldsForUse();
+                var values = (record && record.custom && typeof record.custom === 'object') ? record.custom : {};
+                customFieldsGrid.innerHTML = '';
+                if (!defs.length) return;
+
+                for (var i = 0; i < defs.length; i++) {
+                    var d = defs[i] || {};
+                    var fid = String(d.id || '');
+                    if (!fid) continue;
+
+                    var wrap = document.createElement('div');
+                    wrap.className = 'field';
+
+                    var label = document.createElement('label');
+                    label.setAttribute('for', 'custom_' + fid);
+                    label.textContent = String(d.name || '');
+                    wrap.appendChild(label);
+
+                    var input = document.createElement('input');
+                    input.className = 'input';
+                    input.id = 'custom_' + fid;
+                    input.setAttribute('data-custom-field-id', fid);
+
+                    var t = String(d.type || 'text');
+                    if (t === 'date') {
+                        input.type = 'date';
+                    } else if (t === 'number') {
+                        input.type = 'number';
+                        input.step = '1';
+                    } else if (t === 'decimal') {
+                        input.type = 'number';
+                        input.step = '0.01';
+                    } else {
+                        input.type = 'text';
+                    }
+
+                    if (d.required) input.required = true;
+                    input.value = values[fid] == null ? '' : String(values[fid]);
+
+                    wrap.appendChild(input);
+                    customFieldsGrid.appendChild(wrap);
+                }
+            }
+
+            logoutBtn.addEventListener('click', function () {
+                appendAudit({
+                    action: 'logout',
+                    module: 'auth',
+                    user: user,
+                    tsIso: new Date().toISOString(),
+                    details: 'User signed out'
+                });
+                sessionStorage.removeItem(AUTH_KEY);
+                sessionStorage.removeItem(USER_KEY);
+                window.location.replace('login.html');
+            });
+
+            function setHint(message) {
+                hintEl.textContent = message;
+            }
+
+            function newId(prefix) {
+                return String(prefix || 'id') + '-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+            }
+
+            function sanitizeRecords(list) {
+                var out = [];
+                for (var i = 0; i < (list || []).length; i++) {
+                    out.push(list[i] || {});
+                }
+                return out;
+            }
+
+            function defaultWorkbookFromLegacyArray(records) {
+                var sid = newId('sheet');
+                var now = new Date().toISOString();
+                return {
+                    version: 1,
+                    activeSheetId: sid,
+                    sheets: [{ id: sid, name: 'Sheet 1', createdAt: now, updatedAt: now }],
+                    recordsBySheet: (function () {
+                        var map = {};
+                        map[sid] = sanitizeRecords(records || []);
+                        return map;
+                    })(),
+                    layoutsBySheet: (function () {
+                        var map = {};
+                        map[sid] = null;
+                        return map;
+                    })()
+                };
+            }
+
+            function normalizeWorkbookShape(wb) {
+                var now = new Date().toISOString();
+                if (!wb || typeof wb !== 'object') wb = {};
+                if (!Array.isArray(wb.sheets)) wb.sheets = [];
+                if (!wb.recordsBySheet || typeof wb.recordsBySheet !== 'object') wb.recordsBySheet = {};
+                if (!wb.layoutsBySheet || typeof wb.layoutsBySheet !== 'object') wb.layoutsBySheet = {};
+                if (!wb.sheets.length) {
+                    var sid = newId('sheet');
+                    wb.sheets.push({ id: sid, name: 'Sheet 1', createdAt: now, updatedAt: now });
+                    wb.recordsBySheet[sid] = [];
+                    wb.activeSheetId = sid;
+                    if (!wb.layoutsBySheet.hasOwnProperty(sid)) wb.layoutsBySheet[sid] = null;
+                }
+                if (!wb.activeSheetId) wb.activeSheetId = String(wb.sheets[0].id || '');
+                var found = false;
+                for (var i = 0; i < wb.sheets.length; i++) {
+                    if (String(wb.sheets[i] && wb.sheets[i].id || '') === String(wb.activeSheetId)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) wb.activeSheetId = String(wb.sheets[0].id || '');
+                for (var i = 0; i < wb.sheets.length; i++) {
+                    var sid2 = String(wb.sheets[i] && wb.sheets[i].id ? wb.sheets[i].id : '');
+                    if (!sid2) continue;
+                    if (!Array.isArray(wb.recordsBySheet[sid2])) wb.recordsBySheet[sid2] = [];
+                    if (!wb.layoutsBySheet.hasOwnProperty(sid2)) wb.layoutsBySheet[sid2] = null;
+                    if (!wb.sheets[i].createdAt) wb.sheets[i].createdAt = now;
+                    if (!wb.sheets[i].updatedAt) wb.sheets[i].updatedAt = now;
+                }
+                if (!wb.version) wb.version = 1;
+                return wb;
+            }
+
+            function readWorkbook() {
+                try {
+                    var raw = localStorage.getItem(RECORDS_KEY);
+                    if (!raw) {
+                        var empty = defaultWorkbookFromLegacyArray([]);
+                        localStorage.setItem(RECORDS_KEY, JSON.stringify(empty));
+                        return empty;
+                    }
+                    var data = JSON.parse(raw);
+                    if (Array.isArray(data)) {
+                        var migrated = defaultWorkbookFromLegacyArray(data);
+                        localStorage.setItem(RECORDS_KEY, JSON.stringify(migrated));
+                        return migrated;
+                    }
+                    return normalizeWorkbookShape(data);
+                } catch (e) {
+                    var fallback = defaultWorkbookFromLegacyArray([]);
+                    try { localStorage.setItem(RECORDS_KEY, JSON.stringify(fallback)); } catch (e2) {}
+                    return fallback;
+                }
+            }
+
+            function writeWorkbook(wb) {
+                localStorage.setItem(RECORDS_KEY, JSON.stringify(normalizeWorkbookShape(wb || {})));
+            }
+
+            function sheetById(wb, sheetId) {
+                for (var i = 0; i < (wb && wb.sheets ? wb.sheets.length : 0); i++) {
+                    if (String(wb.sheets[i] && wb.sheets[i].id || '') === String(sheetId)) return wb.sheets[i];
+                }
+                return null;
+            }
+
+            function touchSheetUpdatedAt(wb, sheetId) {
+                var s = sheetById(wb, sheetId);
+                if (s) s.updatedAt = new Date().toISOString();
+            }
+
+            function getTargetSheetId() {
+                try {
+                    var params = new URLSearchParams(window.location.search);
+                    var sid = params.get('sheet');
+                    var wb = readWorkbook();
+                    if (sid && sheetById(wb, sid)) return String(sid);
+                    return String(wb.activeSheetId || '');
+                } catch (e) {
+                    var wb2 = readWorkbook();
+                    return String(wb2.activeSheetId || '');
+                }
+            }
+
+            function readRecords() {
+                var wb = readWorkbook();
+                var sid = getTargetSheetId();
+                var list = (wb.recordsBySheet && wb.recordsBySheet[sid]) ? wb.recordsBySheet[sid] : [];
+                return Array.isArray(list) ? list : [];
+            }
+
+            function writeRecords(records) {
+                var wb = readWorkbook();
+                var sid = getTargetSheetId();
+                if (!wb.recordsBySheet) wb.recordsBySheet = {};
+                wb.recordsBySheet[sid] = Array.isArray(records) ? records : [];
+                wb.activeSheetId = sid;
+                touchSheetUpdatedAt(wb, sid);
+                writeWorkbook(wb);
+            }
+
+            function readAudit() {
+                try {
+                    var raw = localStorage.getItem(AUDIT_KEY);
+                    if (!raw) return [];
+                    var data = JSON.parse(raw);
+                    return Array.isArray(data) ? data : [];
+                } catch (e) {
+                    return [];
+                }
+            }
+
+            function writeAudit(entries) {
+                localStorage.setItem(AUDIT_KEY, JSON.stringify(entries));
+            }
+
+            function appendAudit(entry) {
+                var entries = readAudit();
+                var next = [
+                    {
+                        id: Date.now() + '-' + Math.random().toString(16).slice(2),
+                        tsIso: entry.tsIso || entry.ts || new Date().toISOString(),
+                        user: entry.user || user,
+                        action: entry.action || 'event',
+                        module: entry.module || 'records',
+                        recordId: entry.recordId || '',
+                        recordLabel: entry.recordLabel || '',
+                        changes: Array.isArray(entry.changes) ? entry.changes : [],
+                        details: entry.details || ''
+                    }
+                ];
+
+                for (var i = 0; i < entries.length; i++) next.push(entries[i]);
+                if (next.length > 500) next.length = 500;
+                writeAudit(next);
+            }
+
+            function getEditId() {
+                try {
+                    var params = new URLSearchParams(window.location.search);
+                    return params.get('id');
+                } catch (e) {
+                    return null;
+                }
+            }
+
+            function findRecordById(records, id) {
+                for (var i = 0; i < records.length; i++) {
+                    if (String(records[i].id) === String(id)) return records[i];
+                }
+                return null;
+            }
+
+            function setField(name, value) {
+                if (form[name]) form[name].value = value == null ? '' : String(value);
+            }
+
+            var editId = getEditId();
+            var editRecord = null;
+            if (editId) {
+                var existing = readRecords();
+                editRecord = findRecordById(existing, editId);
+                if (editRecord) {
+                    document.title = 'SSS Inventory - Edit Record';
+                    pageTitle.textContent = 'Edit Record';
+                    pageSubtitle.textContent = 'Update the inventory record details below.';
+                    saveBtn.textContent = 'Update Record';
+
+                    setField('deptcd', editRecord.deptcd);
+                    setField('deptbranch', editRecord.deptbranch);
+                    setField('tmnum', editRecord.tmnum);
+                    setField('description', editRecord.description);
+                    setField('sernum', editRecord.sernum);
+                    setField('oldppronum', editRecord.oldppronum);
+                    setField('pronum', editRecord.pronum);
+                    setField('acqdte', editRecord.acqdte);
+                    setField('acqcst', editRecord.acqcst);
+                    setField('accdep', editRecord.accdep);
+                    setField('bvalue', editRecord.bvalue);
+                    setField('usercd', editRecord.usercd);
+                    setField('lastname', editRecord.lastname);
+                    setField('firstname', editRecord.firstname);
+                    setField('middlename', editRecord.middlename);
+                } else {
+                    editId = null;
+                }
+            }
+
+            if (addCustomFieldBtn) {
+                addCustomFieldBtn.style.display = isCustomFieldsAdmin() ? '' : 'none';
+                addCustomFieldBtn.addEventListener('click', function () {
+                    if (!isCustomFieldsAdmin()) {
+                        setHint('Not authorized to manage custom fields.');
+                        return;
+                    }
+                    clearCustomFieldForm();
+                    openCustomFieldModal();
+                });
+            }
+
+            if (customFieldsSearch) {
+                customFieldsSearch.addEventListener('input', function () {
+                    customFieldsListQuery = String(customFieldsSearch.value || '');
+                    customFieldsPage = 1;
+                    renderCustomFieldsTable();
+                });
+            }
+
+            if (customFieldsPagination) {
+                customFieldsPagination.addEventListener('click', function (e) {
+                    var t = e.target;
+                    if (!t) return;
+                    if (!t.matches('button[data-page]')) return;
+                    var p = Number(t.getAttribute('data-page'));
+                    if (!isFinite(p)) return;
+                    customFieldsPage = p;
+                    renderCustomFieldsTable();
+                });
+            }
+
+            if (customFieldModal) {
+                customFieldModal.addEventListener('click', function (e) {
+                    var t = e.target;
+                    if (!t) return;
+                    if (t.matches('[data-action="close-custom-field"]')) {
+                        closeCustomFieldModal();
+                    }
+                });
+            }
+
+            if (customFieldCloseBtn) {
+                customFieldCloseBtn.addEventListener('click', function () {
+                    closeCustomFieldModal();
+                });
+            }
+
+            document.addEventListener('keydown', function (e) {
+                if (!customFieldModal) return;
+                if (customFieldModal.style.display === 'none') return;
+                if (e.key === 'Escape') closeCustomFieldModal();
+            });
+
+            if (cfClearBtn) {
+                cfClearBtn.addEventListener('click', function () {
+                    clearCustomFieldForm();
+                });
+            }
+
+            function isDuplicateCustomFieldName(defs, normalizedName, excludeId, targetSheetId) {
+                var tSid = String(targetSheetId || '');
+                for (var i = 0; i < defs.length; i++) {
+                    var d = defs[i] || {};
+                    if (excludeId && String(d.id) === String(excludeId)) continue;
+                    if (String(d.nameKey || '') !== String(normalizedName)) continue;
+                    var dSid = d.sheetId == null ? '' : String(d.sheetId);
+                    if (!dSid || !tSid) return true;
+                    if (dSid === tSid) return true;
+                }
+                return false;
+            }
+
+            function isStandardFieldName(normalizedName) {
+                var std = {
+                    deptcd: true,
+                    deptbranch: true,
+                    tmnum: true,
+                    description: true,
+                    sernum: true,
+                    oldppronum: true,
+                    pronum: true,
+                    acqdte: true,
+                    acqcst: true,
+                    accdep: true,
+                    bvalue: true,
+                    usercd: true,
+                    lastname: true,
+                    firstname: true,
+                    middlename: true,
+                    status: true,
+                    action: true
+                };
+                return !!std[String(normalizedName || '')];
+            }
+
+            if (cfSaveBtn) {
+                cfSaveBtn.addEventListener('click', function () {
+                    if (!isCustomFieldsAdmin()) {
+                        setCustomFieldHint('Not authorized.');
+                        return;
+                    }
+
+                    var name = (cfName && cfName.value ? cfName.value : '').trim();
+                    var nameKey = normalizeCustomFieldName(name);
+                    var type = cfType ? String(cfType.value || 'text') : 'text';
+                    var required = cfRequired ? (String(cfRequired.value) === 'yes') : false;
+                    var sheetId = cfSheet ? String(cfSheet.value || '') : '';
+                    var wb = readWorkbook();
+                    if (sheetId && !sheetById(wb, sheetId)) {
+                        setCustomFieldHint('Invalid sheet selection.');
+                        return;
+                    }
+
+                    if (!nameKey) {
+                        setCustomFieldHint('Field Name is required.');
+                        return;
+                    }
+
+                    if (isStandardFieldName(nameKey)) {
+                        setCustomFieldHint('Field Name conflicts with an existing standard column.');
+                        return;
+                    }
+
+                    var defs = readCustomFields();
+                    if (isDuplicateCustomFieldName(defs, nameKey, editingCustomFieldId, sheetId)) {
+                        setCustomFieldHint('Duplicate field name.');
+                        return;
+                    }
+
+                    if (editingCustomFieldId) {
+                        var existing = findCustomFieldById(defs, editingCustomFieldId);
+                        if (!existing) {
+                            setCustomFieldHint('Field not found.');
+                            return;
+                        }
+
+                        var before = {
+                            name: existing.name,
+                            type: existing.type,
+                            required: !!existing.required,
+                            sheetId: existing.sheetId == null ? '' : String(existing.sheetId)
+                        };
+
+                        existing.name = name;
+                        existing.nameKey = nameKey;
+                        existing.type = type;
+                        existing.required = required;
+                        existing.sheetId = sheetId;
+                        existing.updatedAt = new Date().toISOString();
+
+                        appendAudit({
+                            action: 'update',
+                            module: 'custom_fields',
+                            user: user,
+                            tsIso: new Date().toISOString(),
+                            recordId: String(existing.id || ''),
+                            recordLabel: String(existing.name || ''),
+                            details: 'Updated custom field',
+                            changes: [
+                                { field: 'name', oldValue: before.name || '', newValue: name },
+                                { field: 'sheet', oldValue: sheetNameForId(wb, before.sheetId), newValue: sheetNameForId(wb, sheetId) },
+                                { field: 'type', oldValue: before.type || '', newValue: type },
+                                { field: 'required', oldValue: before.required ? 'Yes' : 'No', newValue: required ? 'Yes' : 'No' }
+                            ]
+                        });
+                    } else {
+                        var newId = Date.now() + '-' + Math.random().toString(16).slice(2);
+                        defs.push({
+                            id: newId,
+                            name: name,
+                            nameKey: nameKey,
+                            type: type,
+                            required: required,
+                            sheetId: sheetId,
+                            createdAt: new Date().toISOString(),
+                            updatedAt: new Date().toISOString()
+                        });
+
+                        appendAudit({
+                            action: 'create',
+                            module: 'custom_fields',
+                            user: user,
+                            tsIso: new Date().toISOString(),
+                            recordId: String(newId),
+                            recordLabel: String(name || ''),
+                            details: 'Created custom field',
+                            changes: [
+                                { field: 'name', oldValue: '', newValue: name },
+                                { field: 'sheet', oldValue: '', newValue: sheetNameForId(wb, sheetId) },
+                                { field: 'type', oldValue: '', newValue: type },
+                                { field: 'required', oldValue: '', newValue: required ? 'Yes' : 'No' }
+                            ]
+                        });
+                    }
+
+                    writeCustomFields(defs);
+                    renderCustomFieldsTable();
+                    renderCustomFieldsGrid(editRecord || null);
+                    clearCustomFieldForm();
+                    setCustomFieldHint('Saved.');
+                });
+            }
+
+            if (customFieldsBody) {
+                customFieldsBody.addEventListener('click', function (e) {
+                    var t = e.target;
+                    if (!t) return;
+                    var id = t.getAttribute('data-id');
+                    if (!id) return;
+
+                    if (t.matches('button[data-action="edit-custom-field"]')) {
+                        var defs = readCustomFields();
+                        var d = findCustomFieldById(defs, id);
+                        if (!d) return;
+                        editingCustomFieldId = String(d.id);
+                        if (cfName) cfName.value = d.name || '';
+                        if (cfType) cfType.value = String(d.type || 'text');
+                        if (cfRequired) cfRequired.value = d.required ? 'yes' : 'no';
+                        renderCustomFieldSheetOptions();
+                        if (cfSheet) cfSheet.value = d.sheetId == null ? '' : String(d.sheetId);
+                        setCustomFieldHint('Editing: ' + String(d.name || ''));
+                        return;
+                    }
+
+                    if (t.matches('button[data-action="delete-custom-field"]')) {
+                        if (!isCustomFieldsAdmin()) {
+                            setCustomFieldHint('Not authorized.');
+                            return;
+                        }
+                        if (!confirm('Delete this custom field? Existing values will be removed from records.')) return;
+
+                        var defsBeforeDelete = readCustomFields();
+                        var deleted = findCustomFieldById(defsBeforeDelete, id);
+
+                        var defs2 = readCustomFields();
+                        var nextDefs = [];
+                        for (var i = 0; i < defs2.length; i++) {
+                            if (String(defs2[i].id) !== String(id)) nextDefs.push(defs2[i]);
+                        }
+                        writeCustomFields(nextDefs);
+
+                        var wb = readWorkbook();
+                        var targetSheet = deleted && deleted.sheetId != null ? String(deleted.sheetId) : '';
+                        var sheetIds = [];
+                        if (targetSheet) {
+                            sheetIds = [targetSheet];
+                        } else {
+                            for (var si = 0; si < (wb && wb.sheets ? wb.sheets.length : 0); si++) {
+                                var sid = String(wb.sheets[si] && wb.sheets[si].id || '');
+                                if (sid) sheetIds.push(sid);
+                            }
+                        }
+                        for (var si2 = 0; si2 < sheetIds.length; si2++) {
+                            var sid2 = sheetIds[si2];
+                            var recs = (wb.recordsBySheet && wb.recordsBySheet[sid2]) ? wb.recordsBySheet[sid2] : [];
+                            for (var r = 0; r < recs.length; r++) {
+                                if (!recs[r] || !recs[r].custom) continue;
+                                if (typeof recs[r].custom !== 'object') continue;
+                                delete recs[r].custom[String(id)];
+                            }
+                            if (wb.recordsBySheet) wb.recordsBySheet[sid2] = recs;
+                            touchSheetUpdatedAt(wb, sid2);
+                        }
+                        writeWorkbook(wb);
+
+                        renderCustomFieldsTable();
+                        renderCustomFieldsGrid(editRecord || null);
+                        if (String(editingCustomFieldId) === String(id)) clearCustomFieldForm();
+                        setCustomFieldHint('Deleted.');
+
+                        appendAudit({
+                            action: 'delete',
+                            module: 'custom_fields',
+                            user: user,
+                            tsIso: new Date().toISOString(),
+                            recordId: String(id),
+                            recordLabel: deleted ? String(deleted.name || '') : '',
+                            details: 'Deleted custom field'
+                        });
+                    }
+                });
+            }
+
+            renderCustomFieldsGrid(editRecord || null);
+
+            function clearForm() {
+                form.reset();
+                setHint('');
+                var first = document.getElementById('deptcd');
+                if (first) first.focus();
+            }
+
+            clearFormBtn.addEventListener('click', function () {
+                clearForm();
+            });
+
+            form.addEventListener('submit', function (e) {
+                e.preventDefault();
+                setHint('');
+
+                var custom = {};
+                if (editRecord && editRecord.custom && typeof editRecord.custom === 'object') {
+                    for (var k in editRecord.custom) {
+                        if (!editRecord.custom.hasOwnProperty(k)) continue;
+                        custom[String(k)] = editRecord.custom[k];
+                    }
+                }
+
+                if (customFieldsGrid) {
+                    var defs = customFieldsForUse();
+                    custom = {};
+                    for (var i = 0; i < defs.length; i++) {
+                        var d = defs[i] || {};
+                        var fid = String(d.id || '');
+                        if (!fid) continue;
+                        var el = document.getElementById('custom_' + fid);
+                        var raw = el ? (el.value == null ? '' : String(el.value)) : '';
+                        var v = raw.trim();
+                        if (d.required && !v) {
+                            setHint('Custom field required: ' + String(d.name || ''));
+                            if (el) el.focus();
+                            return;
+                        }
+
+                        if (v) {
+                            var t = String(d.type || 'text');
+                            if (t === 'number' || t === 'decimal') {
+                                var n = Number(String(v).replace(/,/g, ''));
+                                if (!isFinite(n)) {
+                                    setHint('Invalid number for: ' + String(d.name || ''));
+                                    if (el) el.focus();
+                                    return;
+                                }
+                                if (t === 'number' && Math.floor(n) !== n) {
+                                    setHint('Must be an integer for: ' + String(d.name || ''));
+                                    if (el) el.focus();
+                                    return;
+                                }
+                                custom[fid] = String(n);
+                            } else if (t === 'date') {
+                                custom[fid] = v;
+                            } else {
+                                custom[fid] = v;
+                            }
+                        }
+                    }
+                }
+
+                var record = {
+                    id: editId || (Date.now() + '-' + Math.random().toString(16).slice(2)),
+                    deptcd: form.deptcd.value.trim(),
+                    deptbranch: form.deptbranch.value.trim(),
+                    tmnum: form.tmnum.value.trim(),
+                    description: form.description.value.trim(),
+                    sernum: form.sernum.value.trim(),
+                    oldppronum: form.oldppronum.value.trim(),
+                    pronum: form.pronum.value.trim(),
+                    acqdte: form.acqdte.value,
+                    acqcst: form.acqcst.value,
+                    accdep: form.accdep.value,
+                    bvalue: form.bvalue.value,
+                    usercd: form.usercd.value.trim(),
+                    lastname: form.lastname.value.trim(),
+                    firstname: form.firstname.value.trim(),
+                    middlename: form.middlename.value.trim(),
+                    custom: custom
+                };
+
+                var records = readRecords();
+                if (editId) {
+                    var updated = false;
+                    for (var i = 0; i < records.length; i++) {
+                        if (String(records[i].id) === String(editId)) {
+                            records[i] = record;
+                            updated = true;
+                            break;
+                        }
+                    }
+                    if (!updated) {
+                        records.unshift(record);
+                    }
+                } else {
+                    records.unshift(record);
+                }
+
+                writeRecords(records);
+
+                function makeChangesForCreate(rec) {
+                    var keys = ['deptcd', 'deptbranch', 'tmnum', 'description', 'sernum', 'oldppronum', 'pronum', 'acqdte', 'acqcst', 'accdep', 'bvalue', 'usercd', 'lastname', 'firstname', 'middlename'];
+                    var changes = [];
+                    for (var i = 0; i < keys.length; i++) {
+                        var k = keys[i];
+                        changes.push({
+                            field: k,
+                            oldValue: '',
+                            newValue: rec[k] == null ? '' : String(rec[k])
+                        });
+                    }
+
+                    var defs = customFieldsForUse();
+                    var vals = (rec && rec.custom && typeof rec.custom === 'object') ? rec.custom : {};
+                    for (var i = 0; i < defs.length; i++) {
+                        var d = defs[i] || {};
+                        var fid = String(d.id || '');
+                        if (!fid) continue;
+                        changes.push({
+                            field: 'custom:' + String(d.name || fid),
+                            oldValue: '',
+                            newValue: vals[fid] == null ? '' : String(vals[fid])
+                        });
+                    }
+                    return changes;
+                }
+
+                function makeChangesForUpdate(oldRec, newRec) {
+                    var keys = ['deptcd', 'deptbranch', 'tmnum', 'description', 'sernum', 'oldppronum', 'pronum', 'acqdte', 'acqcst', 'accdep', 'bvalue', 'usercd', 'lastname', 'firstname', 'middlename'];
+                    var changes = [];
+                    for (var i = 0; i < keys.length; i++) {
+                        var k = keys[i];
+                        var ov = oldRec && oldRec[k] != null ? String(oldRec[k]) : '';
+                        var nv = newRec && newRec[k] != null ? String(newRec[k]) : '';
+                        if (ov !== nv) {
+                            changes.push({
+                                field: k,
+                                oldValue: ov,
+                                newValue: nv
+                            });
+                        }
+                    }
+
+                    var defs = customFieldsForUse();
+                    var ov0 = (oldRec && oldRec.custom && typeof oldRec.custom === 'object') ? oldRec.custom : {};
+                    var nv0 = (newRec && newRec.custom && typeof newRec.custom === 'object') ? newRec.custom : {};
+                    for (var i = 0; i < defs.length; i++) {
+                        var d = defs[i] || {};
+                        var fid = String(d.id || '');
+                        if (!fid) continue;
+                        var ov = ov0[fid] == null ? '' : String(ov0[fid]);
+                        var nv = nv0[fid] == null ? '' : String(nv0[fid]);
+                        if (ov !== nv) {
+                            changes.push({
+                                field: 'custom:' + String(d.name || fid),
+                                oldValue: ov,
+                                newValue: nv
+                            });
+                        }
+                    }
+                    return changes;
+                }
+
+                appendAudit({
+                    action: editId ? 'update' : 'create',
+                    module: 'records',
+                    user: user,
+                    tsIso: new Date().toISOString(),
+                    recordId: record.id,
+                    recordLabel: String(record.deptcd || '') + ' / ' + String(record.tmnum || ''),
+                    changes: editId ? makeChangesForUpdate(editRecord || {}, record) : makeChangesForCreate(record),
+                    details: (function () {
+                        var wb = readWorkbook();
+                        var sid = getTargetSheetId();
+                        var s = sheetById(wb, sid);
+                        var sName = s ? String(s.name || '') : '';
+                        return 'Sheet: ' + (sName || sid) + ' | ' + (editId ? 'Updated' : 'Created') + ' record PRONUM: ' + String(record.pronum || '');
+                    })()
+                });
+
+                try {
+                    sessionStorage.setItem(TOAST_KEY, JSON.stringify({
+                        type: 'success',
+                        message: editId ? 'Record updated successfully.' : 'Record saved successfully.',
+                        ts: Date.now()
+                    }));
+                } catch (e) {
+                }
+
+                setHint(editId ? 'Record updated. Redirecting...' : 'Record saved. Redirecting...');
+                window.location.replace('index.html?sheet=' + encodeURIComponent(getTargetSheetId()));
+            });
+
+            if (!editId) clearForm();
+        })();
+    </script>
+</body>
+</html>

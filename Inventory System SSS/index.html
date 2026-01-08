@@ -1,0 +1,280 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSS Inventory - Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="toast" id="toast" role="status" aria-live="polite" style="display:none;"></div>
+    <div class="app">
+        <header class="topbar">
+            <div class="topbar-left">
+                <img class="topbar-logo" src="images/logo-v1.png" alt="SSS Inventory logo">
+                <div class="topbar-title">
+                    <div class="topbar-org">Social Security System</div>
+                    <div class="topbar-app">Inventory Management System</div>
+                </div>
+            </div>
+
+            <div class="topbar-right">
+                <div class="user-chip" id="userChip">Signed in</div>
+                <button class="btn" id="logoutBtn" type="button">Logout</button>
+            </div>
+        </header>
+
+        <main class="container container-wide">
+            <section class="hero">
+                <h1 class="h1">Dashboard</h1>
+                <p class="lead">Track assets, supplies, and equipment statuses.</p>
+                
+                <div class="kpis kpis-4" aria-label="Totals">
+                    <div class="kpi">
+                        <div class="kpi-label">Total Acquisition Cost (ACQCST)</div>
+                        <div class="kpi-value" id="totalAcqcst">0.00</div>
+                    </div>
+                    <div class="kpi">
+                        <div class="kpi-label">Total Account Deposit (ACCDEP)</div>
+                        <div class="kpi-value" id="totalAccdep">0.00</div>
+                    </div>
+                    <div class="kpi">
+                        <div class="kpi-label">Total Book Value (BVALUE)</div>
+                        <div class="kpi-value" id="totalBvalue">0.00</div>
+                    </div>
+                    <div class="kpi">
+                        <div class="kpi-label">Record Count</div>
+                        <div class="kpi-value" id="totalRecordCount">0</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel" id="importPanel">
+                <div class="panel-head">
+                    <div>
+                        <h2 class="h2">Bulk Import (Excel)</h2>
+                        <p class="muted">Upload an .xlsx file, review mapping and validation, then import.</p>
+                    </div>
+                    <div class="panel-actions">
+                        <select class="input input-select input-compact" id="importTargetSheet" aria-label="Import target sheet"></select>
+                        <input class="input input-compact" id="importFile" type="file" accept=".xlsx" aria-label="Upload Excel file">
+                        <button class="btn btn-secondary" id="parseImportBtn" type="button">Load File</button>
+                        <button class="btn btn-primary" id="importConfirmBtn" type="button" disabled>Import</button>
+                        <button class="btn btn-secondary" id="downloadImportReportBtn" type="button" disabled>Download Report</button>
+                    </div>
+                </div>
+
+                <div class="panel-body" id="importBody" style="display:none;">
+                    <div class="form-grid" id="importMapping"></div>
+                    <div class="form-hint" id="importHint" aria-live="polite"></div>
+                </div>
+
+                <div class="table-wrap" id="importPreviewWrap" role="region" aria-label="Import preview" tabindex="0" style="display:none;">
+                    <table class="table" id="importPreviewTable">
+                        <thead id="importPreviewHead"></thead>
+                        <tbody id="importPreviewBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <div>
+                        <h2 class="h2">Records</h2>
+                        <p class="muted">Search and manage inventory records.</p>
+                    </div>
+                    <div class="panel-actions">
+                        <label class="sr-only" for="search">Search inventory</label>
+                        <input class="input" id="search" type="text" placeholder="Search DEPTCD, TMNUM, description, serial, name...">
+                        <label class="sr-only" for="deptFilter">Filter department/branch</label>
+                        <select class="input input-select input-compact" id="deptFilter">
+                            <option value="">All DEPT/BRANCH</option>
+                        </select>
+                        <label class="sr-only" for="costFilter">Filter cost category</label>
+                        <select class="input input-select input-compact" id="costFilter">
+                            <option value="">All Cost Categories</option>
+                            <option value="semi_low">Semi-Low (0 - 5,000)</option>
+                            <option value="semi_high">Semi-High (5,001 - 49,999)</option>
+                            <option value="capex">Capex (&ge; 50,000)</option>
+                        </select>
+                        <button class="btn btn-secondary" id="resetFiltersBtn" type="button">Reset</button>
+                        <a class="btn btn-primary" id="addRecordLink" href="add-record.html">Add Record</a>
+                        <label class="sr-only" for="exportFormat">Export format</label>
+                        <select class="input input-select" id="exportFormat">
+                            <option value="spreadsheet_xml">Excel / OpenOffice (XML) - Recommended</option>
+                            <option value="spreadsheet_xml_all_sheets">Excel / OpenOffice (XML) - All Sheets</option>
+                            <option value="excel_csv_sep">Excel (CSV - Auto Detect)</option>
+                            <option value="excel_csv">Excel (CSV - Comma)</option>
+                            <option value="calc_csv">OpenOffice Calc (CSV)</option>
+                            <option value="tsv">Universal (TSV)</option>
+                            <option value="fods">OpenDocument Spreadsheet (FODS)</option>
+                            <option value="word_doc">Word (DOC)</option>
+                            <option value="pdf">PDF (Print)</option>
+                        </select>
+                        <button class="btn btn-secondary" id="exportBtn" type="button">Export</button>
+                        <button class="btn btn-danger" id="clearRecordsBtn" type="button">Clear All</button>
+                    </div>
+                </div>
+
+                <div class="sheet-bar" id="sheetBar" aria-label="Sheets">
+                    <div class="sheet-tabs" id="sheetTabs"></div>
+                    <div class="sheet-actions">
+                        <button class="btn btn-secondary btn-sm" id="addSheetBtn" type="button">Add Sheet</button>
+                        <button class="btn btn-secondary btn-sm" id="renameSheetBtn" type="button">Rename</button>
+                        <button class="btn btn-secondary btn-sm" id="duplicateSheetBtn" type="button">Duplicate</button>
+                        <button class="btn btn-danger btn-sm" id="deleteSheetBtn" type="button">Delete</button>
+                    </div>
+                </div>
+
+                <div class="empty" id="emptyState">
+                    <div class="empty-title">No records yet</div>
+                    <div class="empty-sub">Click “Add Record” to create your first inventory record.</div>
+                </div>
+
+                <div class="table-wrap" id="tableWrap" role="region" aria-label="Inventory table" tabindex="0">
+                    <table class="table" id="invTable">
+                        <thead>
+                            <tr>
+                                <th>REC#</th>
+                                <th>DEPTCD</th>
+                                <th>DEPT/BRANCH</th>
+                                <th>TMNUM</th>
+                                <th class="desc">DESCRIPTION</th>
+                                <th>SERNUM</th>
+                                <th>OLD PPRONUM</th>
+                                <th>PRONUM</th>
+                                <th>ACQDTE</th>
+                                <th class="num">ACQCST</th>
+                                <th class="num">ACCDEP</th>
+                                <th class="num">BVALUE</th>
+                                <th>USERCD</th>
+                                <th>LAST NAME</th>
+                                <th>FIRST NAME</th>
+                                <th>MIDDLE NAME</th>
+                                <th>STATUS</th>
+                                <th>ACTION</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recordsBody"></tbody>
+                    </table>
+                </div>
+
+                <div class="pagination" id="pagination" aria-label="Pagination" role="navigation" style="display:none;"></div>
+
+                <div class="empty" id="noMatchState" style="display:none;">
+                    <div class="empty-title">No matching records</div>
+                    <div class="empty-sub">Try adjusting the search text or filters.</div>
+                </div>
+            </section>
+
+            <section class="panel" id="auditPanel">
+                <div class="panel-head">
+                    <div>
+                        <h2 class="h2">Audit Trail</h2>
+                        <p class="muted">Recent actions (create, update, delete, clear, export).</p>
+                    </div>
+                    <div class="panel-actions">
+                        <label class="sr-only" for="auditSearch">Search audit</label>
+                        <input class="input" id="auditSearch" type="text" placeholder="Search audit trail...">
+
+                        <label class="sr-only" for="auditDateFrom">Audit date from</label>
+                        <input class="input input-compact" id="auditDateFrom" type="date">
+                        <label class="sr-only" for="auditDateTo">Audit date to</label>
+                        <input class="input input-compact" id="auditDateTo" type="date">
+
+                        <label class="sr-only" for="auditUserFilter">Audit user</label>
+                        <input class="input input-compact" id="auditUserFilter" type="text" placeholder="User">
+
+                        <label class="sr-only" for="auditActionFilter">Audit action filter</label>
+                        <select class="input input-select input-compact" id="auditActionFilter">
+                            <option value="">All Actions</option>
+                            <option value="create">Create</option>
+                            <option value="update">Update</option>
+                            <option value="delete">Delete</option>
+                            <option value="import">Import</option>
+                            <option value="export">Export</option>
+                            <option value="login">Login</option>
+                            <option value="logout">Logout</option>
+                            <option value="clear">Clear</option>
+                        </select>
+
+                        <label class="sr-only" for="auditModuleFilter">Audit module filter</label>
+                        <select class="input input-select input-compact" id="auditModuleFilter">
+                            <option value="">All Modules</option>
+                            <option value="auth">Auth</option>
+                            <option value="records">Records</option>
+                            <option value="import">Import</option>
+                            <option value="audit">Audit</option>
+                            <option value="system">System</option>
+                        </select>
+
+                        <label class="sr-only" for="auditExportFormat">Audit export format</label>
+                        <select class="input input-select" id="auditExportFormat">
+                            <option value="csv">CSV</option>
+                            <option value="excel">Excel (XML)</option>
+                            <option value="pdf">PDF (Print)</option>
+                        </select>
+                        <button class="btn btn-secondary" id="auditExportBtn" type="button">Export Audit</button>
+                        <button class="btn btn-danger" id="clearAuditBtn" type="button">Clear Audit</button>
+                    </div>
+                </div>
+
+                <div class="table-wrap" role="region" aria-label="Audit table" tabindex="0">
+                    <table class="table" id="auditTable">
+                        <thead>
+                            <tr>
+                                <th>TIME</th>
+                                <th>USER</th>
+                                <th>ACTION</th>
+                                <th>MODULE</th>
+                                <th>RECORD</th>
+                                <th class="desc">DETAILS</th>
+                            </tr>
+                        </thead>
+                        <tbody id="auditBody"></tbody>
+                    </table>
+                </div>
+
+                <div class="pagination" id="auditPagination" style="display:none;"></div>
+            </section>
+        </main>
+    </div>
+
+    <div class="modal" id="recordAuditModal" aria-hidden="true" style="display:none;">
+        <div class="modal-backdrop" data-action="close-record-audit"></div>
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="recordAuditTitle">
+            <div class="modal-head">
+                <div>
+                    <div class="h2" id="recordAuditTitle">Record Audit Details</div>
+                    <div class="muted" id="recordAuditSubtitle"></div>
+                </div>
+                <button class="btn btn-secondary" id="recordAuditCloseBtn" type="button" data-action="close-record-audit">Close</button>
+            </div>
+            <div class="modal-body">
+                <div class="audit-modal-summary" id="recordAuditSummary"></div>
+                <div class="empty" id="recordAuditNoChanges" style="display:none;">
+                    <div class="empty-title">No Change</div>
+                    <div class="empty-sub">No data was modified for this record.</div>
+                </div>
+                <div class="table-wrap" id="recordAuditChangesWrap" role="region" aria-label="Record changes" tabindex="0">
+                    <table class="table audit-changes" id="recordAuditChangesTable">
+                        <thead>
+                            <tr>
+                                <th>FIELD</th>
+                                <th>OLD</th>
+                                <th>NEW</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recordAuditChangesBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="index.js"></script>
+</body>
+</html>
+
